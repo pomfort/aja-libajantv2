@@ -1,6 +1,5 @@
 /build/
 /install/
-/ajantv2/includes/ntv2version.h
 /docs/ntv2.doxy
 /driver/*.o
 /driver/*.o.cmd
@@ -8,3 +7,6 @@
 /driver/win
 /driver/mac
 .DS_Store
+
+# we use tuist to generate the project so don't inlcude it in git
+libajantv2.xcodeproj

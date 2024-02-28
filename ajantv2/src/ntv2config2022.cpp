@@ -10,7 +10,7 @@
 #include "ntv2endian.h"
 #include "ntv2utils.h"
 #include "ntv2card.h"
-#include <ajabase/network/network.h>
+#include "ajabase/network/network.h"
 #include <sstream>
 
 #if defined (AJALinux) || defined (AJAMac)

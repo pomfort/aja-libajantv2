@@ -10,8 +10,8 @@
 #include "ntv2card.h"
 #include "ntv2utils.h"
 #include <sstream>
-#include <ajabase/network/network.h>
-#include <ajabase/system/systemtime.h>
+#include "ajabase/network/network.h"
+#include "ajabase/system/systemtime.h"
 #include <algorithm>
 #include <math.h>
 
