@@ -63,8 +63,8 @@ int main (int argc, const char ** argv)
 	//	Command line option descriptions:
 	const struct poptOption optionsTable [] =
 	{
-		{"version",	  0,	POPT_ARG_NONE,		&showVersion,	0,	"show version",		AJA_NULL					},
-		{"device",	'd',	POPT_ARG_STRING,	&pDeviceSpec,	0,	"device to use",	"index#, serial#, or model"	},
+		{"version",	  0,	POPT_ARG_NONE,		&showVersion,	0,	"show version & exit",	AJA_NULL					},
+		{"device",	'd',	POPT_ARG_STRING,	&pDeviceSpec,	0,	"device to use",		"index#, serial#, or model"	},
 		POPT_AUTOHELP
 		POPT_TABLEEND
 	};
@@ -82,7 +82,7 @@ int main (int argc, const char ** argv)
 	if (!deviceSpec.empty())
 	{
 		if (!CNTV2DemoCommon::IsValidDevice(deviceSpec))
-			return 0;
+			return 2;
 		else if (CNTV2DeviceScanner::GetFirstDeviceFromArgument(deviceSpec, device))
 			return ShowDeviceInfo(device);	//	Show info for a single device
 		else
@@ -111,6 +111,6 @@ int main (int argc, const char ** argv)
 	else
 		cout << "No AJA devices found" << endl;
 
-	return 0;
+	return deviceCount ? 0 : 1;
 
 }	//	main
