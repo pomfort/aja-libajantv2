@@ -4,7 +4,8 @@ import ProjectDescriptionHelpers
 private let defaultPreprocessorDefinitions = [
     "AJA_MAC",
     "AJAMac",
-    "AJASTATIC"
+    "AJASTATIC",
+    "NTV2_PREVENT_PLUGIN_LOAD"
 ]
 
 private let defaultSettings: SettingsDictionary = [
