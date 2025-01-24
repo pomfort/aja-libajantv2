@@ -60,6 +60,25 @@ let project = Project(
                     "ajantv2/src/win/**"
                 ])
             ]
+        ),
+        Target(
+            name: "ajaDemo-ntv2llburn",
+            destinations: [.mac],
+            product: .commandLineTool,
+            bundleId: "com.pomfort.ajaDemo-ntv2llburn",
+            sources: [
+                "demos/ntv2llburn/main.cpp",
+                "demos/ntv2llburn/ntv2llburn.cpp",
+                "demos/ntv2democommon.cpp",
+            ],
+            dependencies: [
+                .target(name:"libajantv2"),
+                .sdk(name:"Foundation", type: .framework),
+                .sdk(name:"IoKit", type: .framework)
+            ],
+            settings: .settings(base: [
+                "HEADER_SEARCH_PATHS": "demos"
+            ])
         )
     ],
     additionalFiles: [
