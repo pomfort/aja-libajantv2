@@ -237,6 +237,8 @@ static int suspend(struct pci_dev *pdev, pm_message_t state);
 static int resume(struct pci_dev *pdev);
 
 void InitInterruptBitLUT(void);
+int allocNTV2DeviceNumber(unsigned int* pDeviceNumber);
+void freeNTV2DeviceNumber(unsigned int deviceNumber);
 
 /********************/
 /* Static variables */
@@ -851,31 +853,36 @@ int ntv2_ioctl(struct inode *inode, struct file *file, unsigned int cmd, unsigne
 	case IOCTL_NTV2_WRITE_REGISTER:
 		{
 			REGISTER_ACCESS param;
+            int status = 0;
 			if(copy_from_user((void*)&param,(const void*) arg,sizeof(REGISTER_ACCESS)))
 				return -EFAULT;
 
-			WriteRegister(	deviceNumber,
-				  			param.RegisterNumber,
-							param.RegisterValue,
-							param.RegisterMask,
-							param.RegisterShift);
-
+			status = WriteReg(  deviceNumber,
+                                param.RegisterNumber,
+                                param.RegisterValue,
+                                param.RegisterMask,
+                                param.RegisterShift);
+            if (status != 0)
+                return status;
 		}
 		break;
 
 	case IOCTL_NTV2_READ_REGISTER:
 		{
 			REGISTER_ACCESS param;
+            int status = 0;
 			if(copy_from_user((void*)&param,(const void*) arg,sizeof(REGISTER_ACCESS)))
 				return -EFAULT;
 
-			param.RegisterValue = ReadRegister(	deviceNumber,
-				  								param.RegisterNumber,
-												param.RegisterMask,
-												param.RegisterShift);
+			status = ReadReg(   deviceNumber,
+                                param.RegisterNumber,
+                                &param.RegisterValue,
+                                param.RegisterMask,
+                                param.RegisterShift);
 			if(copy_to_user((void*)arg,(const void*) &param,sizeof(REGISTER_ACCESS)))
 				return -EFAULT;
-
+            if(status != 0)
+                return status;
 		}
 		break;
 
