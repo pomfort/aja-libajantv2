@@ -13,3 +13,4 @@
 
 # we use tuist to generate the project so don't inlcude it in git
 libajantv2.xcodeproj
+Derived
