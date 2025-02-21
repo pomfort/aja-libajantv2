@@ -38,7 +38,7 @@ let project = Project(
     name: "libajantv2",
     settings: .settings(configurations: [debugConf, releaseConf]),
     targets: [
-        Target(
+        Target.target(
             name: "libajantv2",
             destinations: [.mac],
             product: .staticLibrary,
@@ -61,7 +61,7 @@ let project = Project(
                 ])
             ]
         ),
-        Target(
+        Target.target(
             name: "ajaDemo-ntv2llburn",
             destinations: [.mac],
             product: .commandLineTool,
