@@ -491,6 +491,22 @@ void CNTV2SupportLogger::FetchInfoLog (ostringstream & oss) const
 			AJASystemInfo::append(infoTable, "Installed Bitfile ByteCount", DECStr(numBytes));
 			AJASystemInfo::append(infoTable, "Installed Bitfile Build Date",	dateStr + " " + timeStr);
 		}
+		
+		if (::NTV2DeviceHasLPProductCode(mDevice.GetDeviceID()))
+		{
+			AJASystemInfo::append(infoTable, "URL INFO", "");
+			std::string urlString;
+			bool hasIP = mDevice.GetLPTunnelConfigurationURLString(urlString);
+			AJASystemInfo::append(infoTable, "Tunnel URL", hasIP ? urlString : "No URL");
+			hasIP = mDevice.GetLPExternalConfigurationURLString(urlString);
+			AJASystemInfo::append(infoTable, "External URL", hasIP ? urlString : "No URL");
+			std::vector<std::string> sfpURLStings;
+			int numSFPs = mDevice.GetSFPURLs(sfpURLStings);
+			for (int i = 0; i < numSFPs; i++)
+			{
+				AJASystemInfo::append(infoTable, "SFP URL", sfpURLStings[i]);
+			}
+		}
 
 		if (mDevice.IsIPDevice())
 		{
@@ -817,7 +833,7 @@ void CNTV2SupportLogger::FetchAudioLog (ostringstream & oss) const
 			else if (NTV2_IS_OUTPUT_MODE(mode))
 			{
 				bool isEmbedderEnabled = false;
-				mDevice.GetAudioOutputEmbedderState(NTV2Channel(audSys), isEmbedderEnabled);
+				mDevice.GetSDIOutputAudioEnabled(NTV2Channel(audSys), isEmbedderEnabled);
 				UWord inChannelCount = isEmbedderEnabled ? maxNumChannels : 0;
 
 				//	Generates a NTV2AudioChannelPairs set for the given number of audio channels...

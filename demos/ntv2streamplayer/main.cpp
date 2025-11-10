@@ -35,7 +35,6 @@ int main (int argc, const char ** argv)
 	int				channelNumber	(1);			//	Channel/FrameStore to use
 	int				doMultiFormat	(0);			//	MultiFormat mode?
 	int				showVersion		(0);			//	Show version?
-	int				hdrType			(0);			//	Transmit HDR anc?
 	AJADebug::Open();
 
 	//	Command line option descriptions:
@@ -48,7 +47,6 @@ int main (int argc, const char ** argv)
 		{"pixelFormat",	'p',	POPT_ARG_STRING,	&pPixelFormat,	0,	"pixel format to use",		"'?' or 'list' to list"		},
 		{"frames",		  0,	POPT_ARG_STRING,	&pFramesSpec,	0,	"frames to Stream",			"num[@min] or min-max"		},
 		{"videoFormat",	'v',	POPT_ARG_STRING,	&pVideoFormat,	0,	"video format to produce",	"'?' or 'list' to list"		},
-		{"hdrType",		't',	POPT_ARG_INT,		&hdrType,		0,	"HDR pkt to send",			"0=none 1=SDR 2=HDR10 3=HLG"},
 		POPT_AUTOHELP
 		POPT_TABLEEND
 	};
@@ -75,7 +73,7 @@ int main (int argc, const char ** argv)
 	config.fVideoFormat = videoFormatStr.empty()	?	NTV2_FORMAT_1080i_5994
 													:	CNTV2DemoCommon::GetVideoFormatFromString(videoFormatStr, VIDEO_FORMATS_ALL);
 	if (videoFormatStr == "?"  ||  videoFormatStr == "list")
-		{cout	<< CNTV2DemoCommon::GetVideoFormatStrings(VIDEO_FORMATS_ALL, deviceSpec) << endl;  return 0;}
+		{cout	<< CNTV2DemoCommon::GetVideoFormatStrings(VIDEO_FORMATS_ALL, pDeviceSpec ? deviceSpec : "") << endl;  return 0;}
 	else if (!videoFormatStr.empty()  &&  config.fVideoFormat == NTV2_FORMAT_UNKNOWN)
 	{	cerr	<< "## ERROR:  Invalid '--videoFormat' value '" << videoFormatStr << "' -- expected values:" << endl
 				<< CNTV2DemoCommon::GetVideoFormatStrings(VIDEO_FORMATS_ALL, deviceSpec) << endl;
@@ -86,7 +84,7 @@ int main (int argc, const char ** argv)
 	const string pixelFormatStr (pPixelFormat  ?  pPixelFormat  :  "");
 	config.fPixelFormat = pixelFormatStr.empty() ? NTV2_FBF_8BIT_YCBCR : CNTV2DemoCommon::GetPixelFormatFromString(pixelFormatStr);
 	if (pixelFormatStr == "?"  ||  pixelFormatStr == "list")
-		{cout << CNTV2DemoCommon::GetPixelFormatStrings(PIXEL_FORMATS_ALL, deviceSpec) << endl;  return 0;}
+		{cout << CNTV2DemoCommon::GetPixelFormatStrings(PIXEL_FORMATS_ALL, pDeviceSpec ? deviceSpec : "") << endl;  return 0;}
 	else if (!pixelFormatStr.empty()  &&  !NTV2_IS_VALID_FRAME_BUFFER_FORMAT(config.fPixelFormat))
 	{
 		cerr	<< "## ERROR:  Invalid '--pixelFormat' value '" << pixelFormatStr << "' -- expected values:" << endl
@@ -106,15 +104,9 @@ int main (int argc, const char ** argv)
 	if (!config.fFrames.valid())
 		{cerr << "## ERROR:  Bad 'frames' spec '" << framesSpec << "'\n## Expected " << legalFramesSpec << endl;  return 1;}
 
-	//	Anc Playback & HDRType
+	//	Anc Playback
 	string ancFilePath (pAncFilePath ? pAncFilePath : "");
 	ancFilePath = aja::strip(ancFilePath);
-	config.fTransmitHDRType	= hdrType == 1	? AJAAncDataType_HDR_SDR
-											: (hdrType == 2	? AJAAncDataType_HDR_HDR10
-															: (hdrType == 3	? AJAAncDataType_HDR_HLG
-																			: AJAAncDataType_Unknown));
-	if (config.fTransmitHDRType != AJAAncDataType_Unknown  &&  !ancFilePath.empty())
-		{cerr	<< "## ERROR:  conflicting options '--hdrType' and '--anc'" << endl;  return 2;}
 
 	config.fAncDataFilePath		= ancFilePath;
 	config.fOutputDest			= ::NTV2ChannelToOutputDestination(config.fOutputChannel);
@@ -138,8 +130,8 @@ int main (int argc, const char ** argv)
 	//	Run it...
 	player.Run();
 
-	cout	<< "   Frames   Frames   Buffer" << endl
-			<< "   Played  Dropped    Level" << endl;
+	cout	<< "   Active   Repeat    Queue" << endl
+			<< "    Count    Count    Depth" << endl;
 	do
 	{	//	Poll its status until stopped...
 		NTV2StreamChannel strStatus;

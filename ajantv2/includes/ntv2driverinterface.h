@@ -125,6 +125,8 @@ class AJAExport CNTV2DriverInterface
 		AJA_VIRTUAL bool		IsMBSystemValid (void);	///< @return	True if microblaze system exists (is valid); otherwise false.
 		AJA_VIRTUAL bool		IsMBSystemReady (void);	///< @return	True if microblaze system is in ready state; otherwise false.
 		AJA_VIRTUAL inline bool	IsIPDevice (void)	{return ::NTV2DeviceCanDoIP(GetDeviceID());}	///< @return	True if I am an IP device; otherwise false.
+        AJA_VIRTUAL inline bool	Is25GIPDevice (void)	{return ::NTV2DeviceCanDo25GIP(GetDeviceID());}	///< @return	True if I am an IP device; otherwise false.
+        AJA_VIRTUAL bool        IsLPSystemReady (void);
 	///@}
 
 	/**
@@ -233,7 +235,7 @@ class AJAExport CNTV2DriverInterface
 		**/
 		AJA_VIRTUAL bool	ReadRegisters (NTV2RegisterReads & inOutValues);
 #endif	//	!defined(READREGMULTICHANGE)
-		AJA_VIRTUAL inline bool	RestoreHardwareProcampRegisters (void) {return false;}
+		//AJA_VIRTUAL inline bool	RestoreHardwareProcampRegisters (void) {return false;}
 	///@}
 
 	/**
@@ -627,11 +629,11 @@ class AJAExport CNTV2DriverInterface
 	//	PROTECTED METHODS
 	protected:
 		/**
-			@brief		Peforms the housekeeping details of opening the specified local, remote or software device.
-			@param[in]	inURLSpec	Specifies the local, remote or software device to be opened.
+			@brief		Peforms the housekeeping details of opening the remote/virtual device using the given specParser.
+			@param[in]	inSpec	Specifies a valid NTV2DeviceSpecParser that has successfully parsed a remote device URL spec.
 			@result		True if successful; otherwise false.
 		**/
-		AJA_VIRTUAL bool	OpenRemote (const std::string & inURLSpec);
+		AJA_VIRTUAL bool	OpenRemote (const NTV2DeviceSpecParser & inSpec);
 		AJA_VIRTUAL bool	CloseRemote (void);	///< @brief	Releases host resources associated with the remote/special device connection.
 		AJA_VIRTUAL bool	OpenLocalPhysical (const UWord inDeviceIndex);	///< @brief	Opens the local/physical device connection.
 		AJA_VIRTUAL bool	CloseLocalPhysical (void);	///< @brief	Releases host resources associated with the local/physical device connection.
