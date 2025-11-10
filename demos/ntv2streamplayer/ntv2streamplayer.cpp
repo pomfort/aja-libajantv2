@@ -188,11 +188,6 @@ AJAStatus NTV2StreamPlayer::SetUpVideo (void)
 	//	Set the frame buffer pixel format for the device FrameStore...
 	mDevice.SetFrameBufferFormat (mConfig.fOutputChannel, mConfig.fPixelFormat);
 
-	//	Check if HDR anc is permissible...
-	if (IS_KNOWN_AJAAncDataType(mConfig.fTransmitHDRType)  &&  !mDevice.features().CanDoCustomAnc())
-		{cerr << "## WARNING:  HDR Anc requested, but device can't do custom anc" << endl;
-			mConfig.fTransmitHDRType = AJAAncDataType_Unknown;}
-
 	//	Set output clock reference...
 	mDevice.SetReference(mDevice.features().CanDo2110() ? NTV2_REFERENCE_SFP1_PTP : NTV2_REFERENCE_FREERUN);
 
@@ -330,12 +325,12 @@ bool NTV2StreamPlayer::RouteOutputSignal (void)
 
 		//	And connect analog video output, if the device has one...
 		if (mDevice.features().GetNumAnalogVideoOutputs())
-			if (!mDevice.Connect (::GetOutputDestInputXpt(NTV2_OUTPUTDESTINATION_ANALOG),  isRGB ? cscVidOutXpt : fsVidOutXpt,  canVerify))
+			if (!mDevice.Connect (::GetOutputDestInputXpt(NTV2_OUTPUTDESTINATION_ANALOG1),  isRGB ? cscVidOutXpt : fsVidOutXpt,  canVerify))
 				connectFailures++;
 
 		//	And connect HDMI video output, if the device has one...
 		if (mDevice.features().GetNumHDMIVideoOutputs())
-			if (!mDevice.Connect (::GetOutputDestInputXpt(NTV2_OUTPUTDESTINATION_HDMI),  isRGB ? cscVidOutXpt : fsVidOutXpt,  canVerify))
+			if (!mDevice.Connect (::GetOutputDestInputXpt(NTV2_OUTPUTDESTINATION_HDMI1),  isRGB ? cscVidOutXpt : fsVidOutXpt,  canVerify))
 				connectFailures++;
 	}
 	if (connectFailures)

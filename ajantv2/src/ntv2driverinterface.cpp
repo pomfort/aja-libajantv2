@@ -186,14 +186,42 @@ bool CNTV2DriverInterface::Open (const UWord inDeviceIndex)
 bool CNTV2DriverInterface::Open (const string & inURLSpec)
 {
 	Close();
-	if (OpenRemote(inURLSpec))
-	{
-		FinishOpen();
-		AJAAtomic::Increment(&gOpenCount);
-		DIDBGX(DEC(gOpenCount) << " opens, " << DEC(gCloseCount) << " closes");
+	NTV2_ASSERT(_pRPCAPI == AJA_NULL);
+	const NTV2DeviceSpecParser specParser (inURLSpec);
+	if (specParser.HasErrors())
+		{DIFAIL("Bad device specification '" << inURLSpec << "': " << specParser.Error()); return false;}
+
+	//	URLSpecs can specify locally-attached devices...
+	if (specParser.IsLocalDevice())
+	{	//	Local device...
+		CNTV2Card card;
+		if (specParser.HasResult(kConnectParamDevSerial))
+		{	if (CNTV2DeviceScanner::GetDeviceWithSerial(specParser.DeviceSerial(), card))
+				Open(card.GetIndexNumber());
+		}
+		else if (specParser.HasResult(kConnectParamDevModel))
+		{	if (CNTV2DeviceScanner::GetFirstDeviceWithName(specParser.DeviceModel(), card))
+				Open(card.GetIndexNumber());
+		}
+		else if (specParser.HasResult(kConnectParamDevID))
+		{	if (CNTV2DeviceScanner::GetFirstDeviceWithID(specParser.DeviceID(), card))
+				Open(card.GetIndexNumber());
+		}
+		else if (specParser.HasResult(kConnectParamDevIndex))
+			Open(specParser.DeviceIndex());
+		if (!IsOpen())
+			{DIFAIL("Failed to open " << specParser.InfoString());  return false;}
 		return true;
 	}
-	return false;
+
+	//	Open the remote/virtual device...
+	if (!OpenRemote(specParser))
+		return false;	//	Failed to open
+
+	FinishOpen();
+	AJAAtomic::Increment(&gOpenCount);
+	DIDBGX(DEC(gOpenCount) << " opens, " << DEC(gCloseCount) << " closes");
+	return true;
 }
 
 bool CNTV2DriverInterface::Close (void)
@@ -246,61 +274,63 @@ bool CNTV2DriverInterface::CloseLocalPhysical (void)
 	}
 #endif	//	AJA_WINDOWS
 
-bool CNTV2DriverInterface::OpenRemote (const string & inURLSpec)
+
+bool CNTV2DriverInterface::OpenRemote (const NTV2DeviceSpecParser & inParser)
 {
 #if defined(AJA_WINDOWS)
 	initWinsock();
 #endif	//	defined(AJA_WINDOWS)
 	NTV2_ASSERT(!IsOpen()); //	Must be closed!
-	_pRPCAPI = AJA_NULL;
-	NTV2DeviceSpecParser specParser (inURLSpec);
-	if (specParser.HasErrors())
-		{DIFAIL("Bad device specification '" << inURLSpec << "': " << specParser.Error()); return false;}
+	NTV2_ASSERT(_pRPCAPI == AJA_NULL);
 
-	if (specParser.IsLocalDevice())
-	{	//	Local device...
-		CNTV2Card card;
-		if (specParser.HasResult(kConnectParamDevSerial))
-		{	if (CNTV2DeviceScanner::GetDeviceWithSerial(specParser.DeviceSerial(), card))
-				Open(card.GetIndexNumber());
-		}
-		else if (specParser.HasResult(kConnectParamDevModel))
-		{	if (CNTV2DeviceScanner::GetFirstDeviceWithName(specParser.DeviceModel(), card))
-				Open(card.GetIndexNumber());
-		}
-		else if (specParser.HasResult(kConnectParamDevID))
-		{	if (CNTV2DeviceScanner::GetFirstDeviceWithID(specParser.DeviceID(), card))
-				Open(card.GetIndexNumber());
-		}
-		else if (specParser.HasResult(kConnectParamDevIndex))
-			Open(specParser.DeviceIndex());
-		if (!IsOpen())
-			{DIFAIL("Failed to open " << specParser.InfoString());  return false;}
-		return true;
-	}
 #if defined(NTV2_NUB_CLIENT_SUPPORT)
-	DIDBG("Opening " << specParser.InfoString());
-	//	Remote or software device:
-	NTV2Dictionary connectParams(specParser.Results());
-	_pRPCAPI = NTV2RPCClientAPI::CreateClient(connectParams);
-	if (!_pRPCAPI)
+	if (inParser.Failed())
+		{ostringstream errs; inParser.PrintErrors(errs); DIFAIL("Bad parser: " << errs.str());  return false;}
+	if (inParser.IsLocalDevice())
+		{DIFAIL("Parser infers local device: " << inParser.InfoString());  return false;}
+
+	NTV2Dictionary connectParams(inParser.Results());
+	//	This "connectParams" dictionary has keys/values that determine which plugin to load,
+	//	and any other configuration parameters specified by the caller. This dictionary is
+	//	modified during the call to "CreateClient" (below) by an NTV2PluginLoader that loads,
+	//	interrogates and validates the plugin.  Several new keys/values are added to it during
+	//	this process that describe the plugin, its signature, and any query parameters it
+	//	requires or accepts for further configuration.
+	DIDBG("Opening " << inParser.InfoString());
+	NTV2RPCAPI * pClient (NTV2RPCClientAPI::CreateClient(connectParams));
+	if (!pClient)
 		return false;	//	Failed to instantiate plugin client
-	//	A plugin's constructor might call its NTV2Connect method right away...
-	if (IsRemote()  &&  !_pRPCAPI->IsConnected())	//	... but if it doesn't...
-		_pRPCAPI->NTV2Connect();					//	... connect now
-	if (IsRemote())
-		_boardOpened = ReadRegister(kRegBoardID, _boardID)  &&  _boardID  &&  _boardID != 0xFFFFFFFF;	//	Try reading its kRegBoardID
+
+	//	At this point, the plugin's NTV2RPCAPI object exists, but may or may not be useable,
+	//	depending on if it's "IsConnected". Before SDK 17.1, the plugin's NTV2Connect function
+	//	was commonly called directly from its constructor. After SDK 17.1.0, OpenRemote is
+	//	responsible for calling NTV2Connect, to allow tools like NTV2Watcher to probe the
+	//	plugin in stages via its client interface.
+	if (!pClient->IsConnected())
+		if (!pClient->NTV2Connect())
+		{	DIFAIL("Failed to connect/open '" << inParser.DeviceSpec() << "'");
+			delete pClient;
+			CloseRemote();
+			return false;
+		}
+
+	//	NTV2 physical devices always have a hardware identity -- the NTV2DeviceID read from register 50.
+	//	This plugin device is considered "open" if ReadRegister is successful, and returns a non-zero
+	//	value that's also not DEVICE_ID_NOTFOUND. (Virtual/software devices that have no NTV2 hardware
+	//	corollary should return DEVICE_ID_SOFTWARE.)
+	_pRPCAPI = pClient;
+	_boardOpened = ReadRegister(kRegBoardID, _boardID)  &&  _boardID  &&  _boardID != DEVICE_ID_NOTFOUND;
 	if (!IsRemote() || !IsOpen())
-		DIFAIL("Failed to open '" << inURLSpec << "'");
+		DIFAIL("Failed to open '" << inParser.DeviceSpec() << "'");
 	return IsRemote() && IsOpen();	//	Fail if not remote nor open
 #else	//	NTV2_NUB_CLIENT_SUPPORT
-	DIFAIL("SDK built without 'NTV2_NUB_CLIENT_SUPPORT' -- cannot OpenRemote '" << inURLSpec << "'");
+	DIFAIL("SDK built without 'NTV2_NUB_CLIENT_SUPPORT' -- cannot OpenRemote '" << inParser.DeviceSpec() << "'");
 	return false;
 #endif	//	NTV2_NUB_CLIENT_SUPPORT
 }	//	OpenRemote
 
 
-bool CNTV2DriverInterface::CloseRemote()
+bool CNTV2DriverInterface::CloseRemote (void)
 {
 	if (_pRPCAPI)
 	{
@@ -674,6 +704,8 @@ bool CNTV2DriverInterface::DriverGetBitFileInformation (BITFILE_INFO_STRUCT & bi
 		case DEVICE_ID_IOX3:						bitFileInfo.bitFileType = NTV2_BITFILE_IOX3_MAIN;					break;
 		case DEVICE_ID_KONAX:						bitFileInfo.bitFileType = NTV2_BITFILE_KONAX;						break;
 		case DEVICE_ID_KONAXM:						bitFileInfo.bitFileType = NTV2_BITFILE_KONAXM;						break;
+        case DEVICE_ID_KONAIP_25G:					bitFileInfo.bitFileType = NTV2_BITFILE_KONAIP_25G;					break;
+		case DEVICE_ID_SOFTWARE:
 		case DEVICE_ID_NOTFOUND:					bitFileInfo.bitFileType = NTV2_BITFILE_TYPE_INVALID;				break;
 	#if !defined (_DEBUG)
 		default:					break;
@@ -1283,14 +1315,22 @@ void CNTV2DriverInterface::BumpEventCount (const INTERRUPT_ENUMS eInterruptType)
 
 bool CNTV2DriverInterface::IsDeviceReady (const bool checkValid)
 {
-	if (!IsIPDevice())
+    if (!IsIPDevice() && !::NTV2DeviceCanDo25GIP(GetDeviceID()))
 		return true;	//	Non-IP devices always ready
-
-	if (!IsMBSystemReady())
-		return false;
-
-	if (checkValid && !IsMBSystemValid())
-		return false;
+    
+    if (IsIPDevice())
+    {
+        if (!IsMBSystemReady())
+            return false;
+    
+        if (checkValid && !IsMBSystemValid())
+            return false;
+    }
+    else
+    {
+        if (!IsLPSystemReady())
+            return false;
+    }
 
 	return true;	//	Ready!
 }
@@ -1319,6 +1359,19 @@ bool CNTV2DriverInterface::IsMBSystemReady (void)
 	// Not enough to read MB State, we need to make sure MB is running
 	ReadRegister(SAREK_REGS + kRegSarekMBUptime, val);
 	return (val < 2) ? false : true;
+}
+
+bool CNTV2DriverInterface::IsLPSystemReady (void)
+{
+    if (!::NTV2DeviceCanDo25GIP(GetDeviceID()))
+        return false;	//	No local proc
+    
+    uint32_t val;
+    ReadRegister(kRegReserved83, val);
+    if (val == 0x00)
+        return false;	//	MB not ready
+
+    return true;
 }
 
 #if defined(NTV2_WRITEREG_PROFILING)	//	Register Write Profiling
@@ -1629,8 +1682,7 @@ bool CNTV2DriverInterface::GetBoolParam (const ULWord inParamID, ULWord & outVal
 		case kDeviceHasBiDirectionalSDI:			outValue = ::NTV2DeviceHasBiDirectionalSDI(devID);					break;
 		case kDeviceHasColorSpaceConverterOnChannel2:	outValue = ::NTV2DeviceCanDoWidget(devID, NTV2_WgtCSC2);		break;	//	Deprecate?
 		case kDeviceHasIDSwitch:					outValue = ::NTV2DeviceCanDoIDSwitch(devID);						break;
-		case kDeviceHasNTV4FrameStores:				outValue =		(devID == DEVICE_ID_KONAX)
-																||	(devID == DEVICE_ID_KONAXM) ? 1 : 0;				break;
+        case kDeviceHasNTV4FrameStores:				outValue = ::NTV2DeviceHasNTV4FrameStores(devID);                   break;
 		case kDeviceHasNWL:							outValue = ::NTV2DeviceHasNWL(devID);								break;
 		case kDeviceHasPCIeGen2:					outValue = ::NTV2DeviceHasPCIeGen2(devID);							break;
 		case kDeviceHasRetailSupport:				outValue = ::NTV2DeviceHasRetailSupport(devID);						break;
@@ -1643,6 +1695,7 @@ bool CNTV2DriverInterface::GetBoolParam (const ULWord inParamID, ULWord & outVal
 		case kDeviceIs64Bit:						outValue = ::NTV2DeviceIs64Bit(devID);								break;	//	Deprecate?
 		case kDeviceIsDirectAddressable:			outValue = ::NTV2DeviceIsDirectAddressable(devID);					break;	//	Deprecate?
 		case kDeviceIsExternalToHost:				outValue = ::NTV2DeviceIsExternalToHost(devID);						break;
+		case kDeviceIsLocalPhysical:				outValue = !IsRemote();												break;
 		case kDeviceIsSupported:					outValue = ::NTV2DeviceIsSupported(devID);							break;
 		case kDeviceNeedsRoutingSetup:				outValue = ::NTV2DeviceNeedsRoutingSetup(devID);					break;	//	Deprecate?
 		case kDeviceSoftwareCanChangeFrameBufferSize:	outValue = ::NTV2DeviceSoftwareCanChangeFrameBufferSize(devID);	break;
@@ -1684,7 +1737,9 @@ bool CNTV2DriverInterface::GetBoolParam (const ULWord inParamID, ULWord & outVal
 																&& (GetDeviceID() != DEVICE_ID_KONAHDMI)				//	Not a KonaHDMI
 																&& (!IsSupported(kDeviceCanDoAudioMixer));				//	No audio mixer
 													break;
-
+		case kDeviceROMHasBankSelect:				outValue = GetNumSupported(kDeviceGetSPIFlashVersion) >= 3
+																&&  GetNumSupported(kDeviceGetSPIFlashVersion) <= 6;	break;
+		case kDeviceCanDoVersalSysMon:				outValue = ::NTV2DeviceCanDoVersalSysMon(devID);					break;
 		case kDeviceCanDoAudioMixer:
 		case kDeviceHasMicrophoneInput:
 		default:									return false;	//	Bad param

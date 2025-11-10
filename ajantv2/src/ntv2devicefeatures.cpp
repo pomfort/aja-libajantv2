@@ -120,8 +120,10 @@
 	{
 		switch (index0)
 		{
-			case 0:		return (NTV2DeviceCanDoWidget(boardID, NTV2_Wgt3GSDIIn1) || NTV2DeviceCanDoWidget(boardID, NTV2_WgtSDIIn1) || NTV2DeviceCanDoWidget(boardID, NTV2_Wgt12GSDIIn1));
-			case 1:		return (NTV2DeviceCanDoWidget(boardID, NTV2_Wgt3GSDIIn2) || NTV2DeviceCanDoWidget(boardID, NTV2_WgtSDIIn2) || NTV2DeviceCanDoWidget(boardID, NTV2_Wgt12GSDIIn2));
+			case 0:		return (NTV2DeviceCanDoWidget(boardID, NTV2_Wgt3GSDIIn1) || NTV2DeviceCanDoWidget(boardID, NTV2_WgtSDIIn1) || NTV2DeviceCanDoWidget(boardID, NTV2_Wgt12GSDIIn1) ||
+								NTV2DeviceCanDoWidget(boardID, NTV2_Wgt3GSDIOut1));
+			case 1:		return (NTV2DeviceCanDoWidget(boardID, NTV2_Wgt3GSDIIn2) || NTV2DeviceCanDoWidget(boardID, NTV2_WgtSDIIn2) || NTV2DeviceCanDoWidget(boardID, NTV2_Wgt12GSDIIn2) ||
+								NTV2DeviceCanDoWidget(boardID, NTV2_Wgt3GSDIOut2));
 			case 2:		return (NTV2DeviceCanDoWidget(boardID, NTV2_Wgt3GSDIIn3) || NTV2DeviceCanDoWidget(boardID, NTV2_Wgt12GSDIIn3));
 			case 3:		return (NTV2DeviceCanDoWidget(boardID, NTV2_Wgt3GSDIIn4) || NTV2DeviceCanDoWidget(boardID, NTV2_Wgt12GSDIIn4));
 			case 4:		return NTV2DeviceCanDoWidget(boardID, NTV2_Wgt3GSDIIn5);
@@ -137,17 +139,17 @@
 		const UWord numSDIs = NTV2DeviceGetNumVideoOutputs(inDeviceID);
 		switch(inOutputDest)
 		{
-			case NTV2_OUTPUTDESTINATION_ANALOG: return NTV2DeviceGetNumAnalogVideoOutputs(inDeviceID) > 0;
-			case NTV2_OUTPUTDESTINATION_HDMI:	return NTV2DeviceGetNumHDMIVideoOutputs(inDeviceID) > 0;
-			case NTV2_OUTPUTDESTINATION_SDI1:	return numSDIs > 0;
-			case NTV2_OUTPUTDESTINATION_SDI2:	return numSDIs > 1;
-			case NTV2_OUTPUTDESTINATION_SDI3:	return numSDIs > 2;
-			case NTV2_OUTPUTDESTINATION_SDI4:	return numSDIs > 3;
-			case NTV2_OUTPUTDESTINATION_SDI5:	return numSDIs > 4;
-			case NTV2_OUTPUTDESTINATION_SDI6:	return numSDIs > 5;
-			case NTV2_OUTPUTDESTINATION_SDI7:	return numSDIs > 6;
-			case NTV2_OUTPUTDESTINATION_SDI8:	return numSDIs > 7;
-			default:							break;
+			case NTV2_OUTPUTDESTINATION_ANALOG1:	return NTV2DeviceGetNumAnalogVideoOutputs(inDeviceID) > 0;
+			case NTV2_OUTPUTDESTINATION_HDMI1:		return NTV2DeviceGetNumHDMIVideoOutputs(inDeviceID) > 0;
+			case NTV2_OUTPUTDESTINATION_SDI1:		return numSDIs > 0;
+			case NTV2_OUTPUTDESTINATION_SDI2:		return numSDIs > 1;
+			case NTV2_OUTPUTDESTINATION_SDI3:		return numSDIs > 2;
+			case NTV2_OUTPUTDESTINATION_SDI4:		return numSDIs > 3;
+			case NTV2_OUTPUTDESTINATION_SDI5:		return numSDIs > 4;
+			case NTV2_OUTPUTDESTINATION_SDI6:		return numSDIs > 5;
+			case NTV2_OUTPUTDESTINATION_SDI7:		return numSDIs > 6;
+			case NTV2_OUTPUTDESTINATION_SDI8:		return numSDIs > 7;
+			default:	break;
 		}
 		return false;
 	}
@@ -407,6 +409,7 @@
 			case DEVICE_ID_CORVID44_PLNR:
 			case DEVICE_ID_TTAP_PRO:
 		    case DEVICE_ID_KONAX:
+            case DEVICE_ID_KONAIP_25G:
 				switch (fg)
 				{
 				case NTV2_FG_4x3840x2160:
@@ -577,6 +580,7 @@
 			case DEVICE_ID_CORVID44_PLNR:
 			case DEVICE_ID_TTAP_PRO:
 			case DEVICE_ID_KONAX:
+            case DEVICE_ID_KONAIP_25G:
 				switch (fg)
 				{
 					case NTV2_FG_4x1920x1080:

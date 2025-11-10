@@ -870,7 +870,7 @@ static inline uint32_t ENDIAN_32HtoN(const uint32_t inValue)	{return NTV2EndianS
 			CHECK_EQ(pktsPost.CountAncillaryDataWithID(0x41, 0x01), 0);						//	0 VPID packets
 			CHECK_EQ(pktsPost.CountAncillaryDataWithID(0x41, 0x07), 1);						//	1 SCTE104 packet
 			CHECK_EQ(pktsPost.CountAncillaryDataWithType(AJAAncDataType_Cea608_Vanc), 2);	//	2 CEA608 packets
-			CHECK_EQ(pktsPost.CountAncillaryData(), 5);										//	5 packets total
+			CHECK_EQ(pktsPost.CountAncillaryData(), 3);										//	3 packets total
 		}	//	TEST_CASE("BFT_StripNativeGUMP")
 
 		TEST_CASE("BFT_AncillaryData")
@@ -3450,6 +3450,36 @@ cout << "AnalogTest -- " << pkts << endl;
 			perfOverall.Report();
 		}	//	TEST_CASE("RTPTimingTest")
 #endif	//	DISABLED FOR NOW
+
+
+#if defined(AJA_USE_CPLUSPLUS11)
+		TEST_CASE("BFT_AncListMoveSemantics")
+		{
+			const string myPacketData ("This is a test packet to be used with the new move semantics added to AJAAncillaryList");
+			AJAAncillaryData pkt;
+			pkt.SetDID(0xAA);  pkt.SetSID(0xBB);
+			pkt.SetPayloadData(reinterpret_cast<const uint8_t*>(myPacketData.c_str()), myPacketData.length());
+			AJAAncillaryList pktsC;
+
+			//	Create "A" list of 1024 packets...
+			AJAAncillaryList pktsA;
+			while (pktsA.CountAncillaryData() < 1024)
+				pktsA.AddAncillaryData(pkt);
+			CHECK_EQ(pktsA.CountAncillaryData(), 1024);
+			CHECK_EQ(pktsC.CountAncillaryData(), 0);
+
+			//	Move A's packets into new "B" list...
+			AJAAncillaryList pktsB(std::move(pktsA));
+			CHECK_EQ(pktsC.CountAncillaryData(), 0);
+			CHECK_EQ(pktsA.CountAncillaryData(), 0);
+			CHECK_EQ(pktsB.CountAncillaryData(), 1024);
+
+			//	Move B's packets into "C"...
+			pktsC = std::move(pktsB);
+			CHECK_EQ(pktsB.CountAncillaryData(), 0);
+			CHECK_EQ(pktsC.CountAncillaryData(), 1024);
+		}	//	TEST_CASE("BFT_AncDataCompare")
+#endif	//	defined(AJA_USE_CPLUSPLUS11)
 
 
 //	This explicitly tests AJAAncillaryData::GenerateTransmitData:

@@ -328,6 +328,12 @@ bool CNTV2WinDriverInterface::ReadRegister (const ULWord inRegNum,	ULWord & outV
 	if (ok)
 	{
 		outValue = propStruct.ulRegisterValue;
+#if 0	//	Fake KONAIP25G from C4412G (see also NTV2GetRegisters::GetRegisterValues):
+		if (inRegNum == kRegBoardID  &&  outValue == DEVICE_ID_CORVID44_8K)
+			outValue = DEVICE_ID_KONAIP_25G;
+		else if (inRegNum == kRegReserved83  ||  inRegNum == kRegLPRJ45IP)
+			outValue = 0x0A03FAD9;	//	Local IPv4    10.3.250.217
+#endif	//	0
 		return true;
 	}
 	WDIFAIL("reg=" << DEC(inRegNum) << " val=" << xHEX0N(outValue,8) << " msk=" << xHEX0N(inMask,8) << " shf=" << DEC(inShift) << " failed: " << ::GetKernErrStr(GetLastError()));
@@ -392,7 +398,7 @@ bool CNTV2WinDriverInterface::WriteRegister (const ULWord inRegNum,	 const ULWor
 bool CNTV2WinDriverInterface::ConfigureInterrupt (const bool bEnable, const INTERRUPT_ENUMS eInterruptType)
 {
 	if (IsRemote())
-		return CNTV2DriverInterface::ConfigureInterrupt(bEnable, eInterruptType);
+		return false;
 	if (!IsOpen())
 		return false;
 	KSPROPERTY_AJAPROPS_INTERRUPTS_S propStruct;	// boilerplate AVStream Property structure
@@ -469,7 +475,7 @@ bool CNTV2WinDriverInterface::GetInterruptCount (const INTERRUPT_ENUMS eInterrup
 {
 #if defined(NTV2_NUB_CLIENT_SUPPORT)
 	if (IsRemote())
-		return CNTV2DriverInterface::GetInterruptCount(eInterruptType, outCount);
+		return false;
 #endif	//	defined(NTV2_NUB_CLIENT_SUPPORT)
 	if (!IsOpen())
 		return false;
@@ -765,6 +771,8 @@ bool CNTV2WinDriverInterface::WaitForInterrupt (const INTERRUPT_ENUMS eInterrupt
 	{
 		if (!IsOpen())
 			return false;
+		if (IsRemote())
+			return false;
 		// For every locked entry, try to free it
 		for (size_t ndx(0);	 ndx < _vecDmaLocked.size();  ndx++)
 			CompleteMemoryForDMA(_vecDmaLocked.at(ndx));
@@ -790,6 +798,8 @@ bool CNTV2WinDriverInterface::WaitForInterrupt (const INTERRUPT_ENUMS eInterrupt
 	{
 		if (!IsOpen())
 			return false;
+		if (IsRemote())
+			return false;
 		// Use NTV2_PIO as an overloaded flag to indicate this is not a DMA transfer
 		if (!DmaTransfer (NTV2_PIO, true, 0, pFrameBuffer, 0, ulNumBytes, false))
 			return false;
@@ -808,6 +818,8 @@ bool CNTV2WinDriverInterface::WaitForInterrupt (const INTERRUPT_ENUMS eInterrupt
 	bool CNTV2WinDriverInterface::CompleteMemoryForDMA (ULWord * pFrameBuffer)
 	{
 		if (!IsOpen())
+			return false;
+		if (IsRemote())
 			return false;
 		// Use NTV2_PIO as an overloaded flag to indicate this is not a DMA transfer
 		if (!DmaTransfer (NTV2_PIO, false, 0, pFrameBuffer, 0, 0))
@@ -839,7 +851,7 @@ bool CNTV2WinDriverInterface::DmaTransfer ( const NTV2DMAEngine inDMAEngine,
 {
 	if (IsRemote())
 		return CNTV2DriverInterface::DmaTransfer(inDMAEngine, inIsRead, inFrameNumber, pFrameBuffer,
-												inOffsetBytes, inByteCount, inSynchronous);
+			inOffsetBytes, inByteCount, inSynchronous);
 	if (!IsOpen())
 		return false;
 
@@ -882,8 +894,8 @@ bool CNTV2WinDriverInterface::DmaTransfer ( const NTV2DMAEngine inDMAEngine,
 											const bool			inSynchronous)
 {
 	if (IsRemote())
-		return CNTV2DriverInterface::DmaTransfer (inDMAEngine, inIsRead, inFrameNumber, pFrameBuffer, inOffsetBytes, inByteCount,
-													inNumSegments, inHostPitch, inCardPitch, inSynchronous);
+		return CNTV2DriverInterface::DmaTransfer(inDMAEngine, inIsRead, inFrameNumber, pFrameBuffer,
+			inOffsetBytes, inByteCount, inNumSegments, inHostPitch, inCardPitch, inSynchronous);
 	if (!IsOpen())
 		return false;
 
@@ -928,8 +940,8 @@ bool CNTV2WinDriverInterface::DmaTransfer ( const NTV2DMAEngine			inDMAEngine,
 											const PCHANNEL_P2P_STRUCT & inP2PData)
 {
 	if (IsRemote())
-		return CNTV2DriverInterface::DmaTransfer (inDMAEngine, inDMAChannel, inIsTarget, inFrameNumber, inCardOffsetBytes, inByteCount,
-													inNumSegments, inHostPitch, inCardPitch, inP2PData);
+		return CNTV2DriverInterface::DmaTransfer(inDMAEngine, inDMAChannel, inIsTarget, inFrameNumber, inCardOffsetBytes, 
+													inByteCount, inNumSegments, inHostPitch, inCardPitch, inP2PData);
 	if (!IsOpen())
 		return false;
 	if (!inP2PData)
@@ -1351,6 +1363,8 @@ bool CNTV2WinDriverInterface::NTV2Message (NTV2_HEADER * pInMessage)
 {
 	if (!pInMessage)
 		{WDIFAIL("Failed: NULL pointer"); return false;}
+	if (IsRemote())
+		return CNTV2DriverInterface::NTV2Message(pInMessage);	//	Implement NTV2Message on nub
 	DWORD dwBytesReturned(0);
 	AJADebug::StatTimerStart(AJA_DebugStat_NTV2Message);
 	const bool ok = DeviceIoControl(_hDevice, IOCTL_AJANTV2_MESSAGE, pInMessage, pInMessage->GetSizeInBytes (), pInMessage, pInMessage->GetSizeInBytes(), &dwBytesReturned, NULL);
@@ -1436,5 +1450,7 @@ bool CNTV2WinDriverInterface::DriverSetBitFileInformation (const BITFILE_INFO_ST
 
 bool CNTV2WinDriverInterface::RestoreHardwareProcampRegisters (void)
 {
+	if (IsRemote())
+		return false;
 	return WriteRegister(kVRegRestoreHardwareProcampRegisters, 0);
 }
