@@ -276,6 +276,7 @@ class AJAExport CaptureConfig
 	public:
 		std::string			fDeviceSpec;		///< @brief	The AJA device to use
 		std::string			fAncDataFilePath;	///< @brief	Optional path to Anc binary data file
+		std::string			fCaptureDirectory;	///< @brief	Directory path for captured frames
 		NTV2Channel			fInputChannel;		///< @brief	The device channel to use
 		NTV2InputSource		fInputSource;		///< @brief	The device input connector to use
 		NTV2ACFrameRange	fFrames;			///< @brief	AutoCirculate frame count or range
@@ -293,6 +294,7 @@ class AJAExport CaptureConfig
 		inline explicit	CaptureConfig (const std::string & inDeviceSpec	= "0")
 			:	fDeviceSpec			(inDeviceSpec),
 				fAncDataFilePath	(),
+				fCaptureDirectory	(),
 				fInputChannel		(NTV2_CHANNEL_INVALID),
 				fInputSource		(NTV2_INPUTSOURCE_INVALID),
 				fFrames				(7),
@@ -321,6 +323,7 @@ typedef struct PlayerConfig
 	public:
 		std::string			fDeviceSpec;		///< @brief	The AJA device to use
 		std::string			fAncDataFilePath;	///< @brief	Optional path to Anc binary data file to playout
+		std::string			fPlaybackDirectory;	///< @brief	Directory path for playback frames
 		NTV2Channel			fOutputChannel;		///< @brief	The device channel to use
 		NTV2OutputDest		fOutputDest;		///< @brief	The desired output connector to use
 		NTV2ACFrameRange	fFrames;			///< @brief	AutoCirculate frame count or range
@@ -344,6 +347,7 @@ typedef struct PlayerConfig
 		inline explicit	PlayerConfig (const std::string & inDeviceSpecifier	= "0")
 			:	fDeviceSpec			(inDeviceSpecifier),
 				fAncDataFilePath	(),
+				fPlaybackDirectory	(),
 				fOutputChannel		(NTV2_CHANNEL1),
 				fOutputDest			(NTV2_OUTPUTDESTINATION_SDI2),
 				fFrames				(7),

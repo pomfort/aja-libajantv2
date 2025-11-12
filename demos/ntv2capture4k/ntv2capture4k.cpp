@@ -33,7 +33,7 @@ NTV2Capture4K::NTV2Capture4K (const CaptureConfig & inConfig)
 		mAVCircularBuffer	(),
 		mGlobalQuit			(false),
 		mACOptions			(AUTOCIRCULATE_WITH_RP188 | AUTOCIRCULATE_WITH_ANC),
-        mCaptureDirectory   ("/tmp/aja-capture")
+        mCaptureDirectory   (inConfig.fCaptureDirectory)
 {
 }	//	constructor
 

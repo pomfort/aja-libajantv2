@@ -28,7 +28,6 @@ using namespace std;
 // File-based playback configuration
 // Set USE_FILE_PLAYBACK to 1 to play from files, 0 to generate test patterns
 #define USE_FILE_PLAYBACK 1
-#define FILE_PLAYBACK_DIRECTORY "/tmp/aja-capture"  // Directory containing frame-XXXXXXXXXX subdirs
 
 //	Convenience macros for EZ logging:
 #define	TCFAIL(_expr_)	AJA_sERROR  (AJA_DebugUnit_TimecodeGeneric, AJAFUNC << ": " << _expr_)
@@ -163,13 +162,13 @@ AJAStatus NTV2Player::Init (void)
 
 #if USE_FILE_PLAYBACK
 	//	Load captured video format and override CLI configuration
-	NTV2VideoFormat capturedFormat = PomfortCommon::restoreVideoFormat(FILE_PLAYBACK_DIRECTORY);
+	NTV2VideoFormat capturedFormat = PomfortCommon::restoreVideoFormat(mConfig.fPlaybackDirectory);
 	if (capturedFormat != NTV2_FORMAT_UNKNOWN) {
 		cerr << "## INFO:  Overriding video format from captured data: "
 		     << ::NTV2VideoFormatToString(capturedFormat) << endl;
 		mConfig.fVideoFormat = capturedFormat;
 	} else {
-		cerr << "## WARNING:  Could not load captured video format from " << FILE_PLAYBACK_DIRECTORY
+		cerr << "## WARNING:  Could not load captured video format from " << mConfig.fPlaybackDirectory
 		     << ", using CLI configuration" << endl;
 	}
 #endif
@@ -734,18 +733,18 @@ void NTV2Player::ProduceFrames (void)
 {
 #if USE_FILE_PLAYBACK
 	// File-based playback mode
-	PLNOTE("Thread started - FILE PLAYBACK MODE from: " << FILE_PLAYBACK_DIRECTORY);
+	PLNOTE("Thread started - FILE PLAYBACK MODE from: " << mConfig.fPlaybackDirectory);
 	PLNOTE("Original TC Indexes: " << mTCIndexes);
 
 	// Override mTCIndexes with captured TC indexes to preserve original signal
-	NTV2TCIndexes capturedTCIndexes = PomfortCommon::restoreTCIndexes(FILE_PLAYBACK_DIRECTORY);
+	NTV2TCIndexes capturedTCIndexes = PomfortCommon::restoreTCIndexes(mConfig.fPlaybackDirectory);
 	if (!capturedTCIndexes.empty())
 	{
 		mTCIndexes = capturedTCIndexes;
 		PLNOTE("Using captured TC Indexes: " << mTCIndexes);
 	}
 
-	PomfortCommon::OpenFromFileFrameProducer fileProducer(mDevice, mConfig.fVideoFormat, FILE_PLAYBACK_DIRECTORY);
+	PomfortCommon::OpenFromFileFrameProducer fileProducer(mDevice, mConfig.fVideoFormat, mConfig.fPlaybackDirectory);
 	ULWord badTally(0);
 
 	while (!mGlobalQuit)

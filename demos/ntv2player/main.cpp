@@ -63,12 +63,23 @@ int main (int argc, const char ** argv)
 	if (showVersion)
 		{cout << argv[0] << ", NTV2 SDK " << ::NTV2Version() << endl;  return 0;}
 
+	//	Directory (positional argument - mandatory)
+	const NTV2StringList & otherArgs(popt.otherArgs());
+	if (otherArgs.empty())
+	{
+		cerr << "## ERROR: Directory path required as argument" << endl;
+		cerr << "Usage: " << argv[0] << " [options] <directory>" << endl;
+		return 1;
+	}
+	const string directory(otherArgs.front());
+
 	//	Device
 	const string deviceSpec (pDeviceSpec ? pDeviceSpec : "0");
 	if (!CNTV2DemoCommon::IsValidDevice(deviceSpec))
 		return 1;
 
 	PlayerConfig config(deviceSpec);
+	config.fPlaybackDirectory = directory;
 
 	//	Channel
 	if ((channelNumber < 1)  ||  (channelNumber > 8))
