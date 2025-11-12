@@ -112,49 +112,56 @@ AJAStatus NTV2Capture4K::Init (void)
 	if (mDevice.features().CanDoMultiFormat())
 		mDevice.SetMultiFormatMode(mConfig.fDoMultiFormat);
 
-//	//	This demo permits only the input channel/frameStore to be specified.  Set the input source here...
-//	const NTV2Channel origCh (mConfig.fInputChannel);
-//	if (isKonaHDMI)
-//	{	//	KonaHDMI gets special treatment...
-//		if (!mConfig.fDoTSIRouting)
-//			{cerr << "## ERROR:  UHD/4K on '" << mDevice.GetDisplayName() << "' requires TSI:  omit '--squares' option" << endl;  return AJA_STATUS_BAD_PARAM;}
-//		if (mConfig.fInputChannel != NTV2_CHANNEL1  &&  mConfig.fInputChannel != NTV2_CHANNEL3)
-//			mConfig.fInputChannel = NTV2_CHANNEL3;
-//		mConfig.fInputSource = mConfig.fInputChannel ? NTV2_INPUTSOURCE_HDMI2 : NTV2_INPUTSOURCE_HDMI1;
-//	}
-//	else if (mDevice.features().CanDo12gRouting())
-//	{
-//		mConfig.fDoTSIRouting = false;	//	TSI Mux/Demux built-in to FrameStores
-//		if (UWord(origCh) >= mDevice.features().GetNumFrameStores())
-//		{
-//			cerr << "## ERROR: No such channel Ch" << DEC(origCh) << " for '" << ::NTV2DeviceIDToString(mDeviceID,true) << "'";
-//			return AJA_STATUS_BAD_PARAM;
-//		}
-//		mConfig.fInputSource = ::NTV2ChannelToInputSource(mConfig.fInputChannel);
-//	}
-//	else if (mConfig.fDoTSIRouting)
-//	{	//	TSI: force even ordinal NTV2Channel values...
-//		if (mConfig.fInputChannel < NTV2_CHANNEL3)
-//			mConfig.fInputChannel = NTV2_CHANNEL1;
-//		else if (mConfig.fInputChannel < NTV2_CHANNEL5)
-//			mConfig.fInputChannel = NTV2_CHANNEL3;
-//		else if (mConfig.fInputChannel < NTV2_CHANNEL7)
-//			mConfig.fInputChannel = NTV2_CHANNEL5;
-//		else
-//			mConfig.fInputChannel = NTV2_CHANNEL7;
-//	}
-//	else  //  quad mode:  force Ch1 (or Ch5 on Corvid88)
-//		mConfig.fInputChannel = mConfig.fInputChannel < NTV2_CHANNEL5  ?  NTV2_CHANNEL1  :  NTV2_CHANNEL5;
-	
+	//	This demo permits only the input channel/frameStore to be specified.  Set the input source here...
+	//	4K/UHD-specific channel validation and correction (only when 4K mode is enabled)
+	if (mConfig.fEnable4K)
+	{
+		const NTV2Channel origCh (mConfig.fInputChannel);
+		if (isKonaHDMI)
+		{	//	KonaHDMI gets special treatment...
+			if (!mConfig.fDoTSIRouting)
+				{cerr << "## ERROR:  UHD/4K on '" << mDevice.GetDisplayName() << "' requires TSI:  omit '--squares' option" << endl;  return AJA_STATUS_BAD_PARAM;}
+			if (mConfig.fInputChannel != NTV2_CHANNEL1  &&  mConfig.fInputChannel != NTV2_CHANNEL3)
+				mConfig.fInputChannel = NTV2_CHANNEL3;
+			mConfig.fInputSource = mConfig.fInputChannel ? NTV2_INPUTSOURCE_HDMI2 : NTV2_INPUTSOURCE_HDMI1;
+		}
+		else if (mDevice.features().CanDo12gRouting())
+		{
+			mConfig.fDoTSIRouting = false;	//	TSI Mux/Demux built-in to FrameStores
+			if (UWord(origCh) >= mDevice.features().GetNumFrameStores())
+			{
+				cerr << "## ERROR: No such channel Ch" << DEC(origCh) << " for '" << ::NTV2DeviceIDToString(mDeviceID,true) << "'";
+				return AJA_STATUS_BAD_PARAM;
+			}
+			mConfig.fInputSource = ::NTV2ChannelToInputSource(mConfig.fInputChannel);
+		}
+		else if (mConfig.fDoTSIRouting)
+		{	//	TSI: force even ordinal NTV2Channel values...
+			if (mConfig.fInputChannel < NTV2_CHANNEL3)
+				mConfig.fInputChannel = NTV2_CHANNEL1;
+			else if (mConfig.fInputChannel < NTV2_CHANNEL5)
+				mConfig.fInputChannel = NTV2_CHANNEL3;
+			else if (mConfig.fInputChannel < NTV2_CHANNEL7)
+				mConfig.fInputChannel = NTV2_CHANNEL5;
+			else
+				mConfig.fInputChannel = NTV2_CHANNEL7;
+		}
+		else  //  quad mode:  force Ch1 (or Ch5 on Corvid88)
+			mConfig.fInputChannel = mConfig.fInputChannel < NTV2_CHANNEL5  ?  NTV2_CHANNEL1  :  NTV2_CHANNEL5;
+
+		if (mConfig.fInputChannel != origCh)
+			cerr	<< "## WARNING:  Specified channel Ch" << DEC(origCh+1) << " corrected to use Ch"
+					<< DEC(mConfig.fInputChannel+1) << " to work for UHD/4K on '" << mDevice.GetDisplayName() << "'" << endl;
+	}
+
 	if (!NTV2_IS_VALID_INPUT_SOURCE(mConfig.fInputSource))
 		mConfig.fInputSource = ::NTV2ChannelToInputSource(mConfig.fInputChannel);
-	
-//	if (mConfig.fInputChannel != origCh)
-//		cerr	<< "## WARNING:  Specified channel Ch" << DEC(origCh+1) << " corrected to use Ch"
-//				<< DEC(mConfig.fInputChannel+1) << " to work for UHD/4K on '" << mDevice.GetDisplayName() << "'" << endl;
 
 	//	Determine input connectors and frameStores to be used...
-	const UWord numSpigots (mDevice.features().CanDo12gRouting() ? 1 : (mConfig.fDoTSIRouting ? 2 : 4));
+	//	In HD mode, use 1 spigot; in 4K mode, depends on device capability and routing
+	const UWord numSpigots (mConfig.fEnable4K
+							? (mDevice.features().CanDo12gRouting() ? 1 : (mConfig.fDoTSIRouting ? 2 : 4))
+							: 1);
 	mActiveSDIs        = ::NTV2MakeChannelSet (::NTV2InputSourceToChannel(mConfig.fInputSource), numSpigots);
 	mActiveFrameStores = ::NTV2MakeChannelSet (mConfig.fInputChannel, numSpigots);
 
@@ -209,7 +216,11 @@ AJAStatus NTV2Capture4K::SetupVideo (void)
 	mVideoFormat = mDevice.GetInputVideoFormat(mConfig.fInputSource);
 	if (mVideoFormat == NTV2_FORMAT_UNKNOWN)
 		{cerr << "## ERROR:  No input signal or unknown format" << endl;  return AJA_STATUS_NOINPUT;}
-	//CNTV2DemoCommon::Get4KInputFormat(mVideoFormat);    //  Convert to 4K format
+
+	//	Convert to 4K format if 4K mode is enabled
+	if (mConfig.fEnable4K)
+		CNTV2DemoCommon::Get4KInputFormat(mVideoFormat);
+
 	mFormatDesc = NTV2FormatDescriptor(mVideoFormat, mConfig.fPixelFormat);
 
 	//	Setting SDI output clock timing/reference is unimportant for capture-only apps...
@@ -219,10 +230,15 @@ AJAStatus NTV2Capture4K::SetupVideo (void)
 	//	Set the device video format to whatever was detected at the input(s)...
 	mDevice.SetVideoFormat (mVideoFormat, false, false, mConfig.fInputChannel);
 	mDevice.SetVANCMode (mActiveFrameStores, NTV2_VANCMODE_OFF);	//	Disable VANC
-//	if (mDevice.features().CanDo12gRouting()  ||  mConfig.fDoTSIRouting)
-//		mDevice.SetTsiFrameEnable (true, mConfig.fInputChannel);
-//	else
-//		mDevice.Set4kSquaresEnable (true, mConfig.fInputChannel);
+
+	//	Enable TSI/4K-specific frame modes when 4K mode is enabled
+	if (mConfig.fEnable4K)
+	{
+		if (mDevice.features().CanDo12gRouting()  ||  mConfig.fDoTSIRouting)
+			mDevice.SetTsiFrameEnable (true, mConfig.fInputChannel);
+		else
+			mDevice.Set4kSquaresEnable (true, mConfig.fInputChannel);
+	}
 
 	//	Set the frame buffer pixel format for the FrameStore(s) to be used on the device...
 	mDevice.SetFrameBufferFormat (mActiveFrameStores, mConfig.fPixelFormat);
@@ -312,8 +328,12 @@ bool NTV2Capture4K::RouteInputSignal (void)
 	const bool isInputRGB (inputColorSpace == NTV2_LHIHDMIColorSpaceRGB);
 	NTV2XptConnections connections;
 
-	return CNTV2DemoCommon::GetInputRouting4K (connections, mConfig, mDeviceID, isInputRGB)
-		&&  mDevice.ApplySignalRoute(connections, !mConfig.fDoMultiFormat);
+	//	Use appropriate routing function based on 4K mode
+	bool gotRouting = mConfig.fEnable4K
+		? CNTV2DemoCommon::GetInputRouting4K (connections, mConfig, mDeviceID, isInputRGB)
+		: CNTV2DemoCommon::GetInputRouting (connections, mConfig, isInputRGB);
+
+	return gotRouting && mDevice.ApplySignalRoute(connections, !mConfig.fDoMultiFormat);
 
 }	//	RouteInputSignal
 
@@ -418,10 +438,10 @@ void NTV2Capture4K::CaptureFrames (void)
 	static const UWord startFrame12g[]	= {0, 7, 64, 71};
 	static const UWord startFrame[]		= {0, 7, 14, 21};
 
-//	if (mDevice.features().CanDo12gRouting())
-//		mConfig.fFrames.setRangeWithCount(7, startFrame12g[mConfig.fInputChannel]);
-//	else	//	TSI or Squares
-//		mConfig.fFrames.setRangeWithCount(7, startFrame[mConfig.fInputChannel / 2]);
+	if (mDevice.features().CanDo12gRouting())
+		mConfig.fFrames.setRangeWithCount(7, startFrame12g[mConfig.fInputChannel]);
+	else	//	TSI or Squares
+		mConfig.fFrames.setRangeWithCount(7, startFrame[mConfig.fInputChannel / 2]);
 
 	CAPNOTE("Thread started");
 	//	Initialize and start capture AutoCirculate...

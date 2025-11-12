@@ -287,6 +287,7 @@ class AJAExport CaptureConfig
 		bool				fWithAnc;			///< @brief	If true, also capture Anc
 		bool				fWithAudio;			///< @brief	If true, also capture Audio
 		bool				fDoTSIRouting;		///< @brief	If true, do TSI routing; otherwise squares
+		bool				fEnable4K;			///< @brief	If true, capture in 4K/UHD mode; otherwise HD mode
 
 		/**
 			@brief	Constructs a default NTV2Capture configuration.
@@ -304,7 +305,8 @@ class AJAExport CaptureConfig
 				fDoMultiFormat		(false),
 				fWithAnc			(false),
 				fWithAudio			(true),
-				fDoTSIRouting		(true)
+				fDoTSIRouting		(true),
+				fEnable4K			(false)
 		{
 		}
 

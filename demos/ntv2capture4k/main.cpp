@@ -32,6 +32,7 @@ int main (int argc, const char ** argv)
 	int				doMultiFormat	(0);			//	MultiFormat mode?
 	int				showVersion		(0);			//	Show version?
 	int				doQuadRouting	(0);			//	Quad/Square routing (i.e. not TSI)?
+	int				enable4K		(0);			//	Enable 4K/UHD mode?
 	int				numAudioLinks	(1);			//	Number of audio systems for multi-link audio
 	AJADebug::Open();
 
@@ -43,6 +44,7 @@ int main (int argc, const char ** argv)
 		{"channel",		'c',	POPT_ARG_INT,		&channelNumber,	0,	"channel to use",			"1-8"						},
 		{"multiFormat",	'm',	POPT_ARG_NONE,		&doMultiFormat,	0,	"use multi-format/channel",	AJA_NULL					},
 		{"pixelFormat",	'p',	POPT_ARG_STRING,	&pPixelFormat,	0,	"pixel format to use",		"'?' or 'list' to list"		},
+		{"4k",			  0,	POPT_ARG_NONE,		&enable4K,		0,	"enable 4K/UHD mode",		AJA_NULL					},
 		{"squares",		's',	POPT_ARG_NONE,		&doQuadRouting,	0,	"use quad routing?",		AJA_NULL					},
 		{"audioLinks",	  0,	POPT_ARG_INT,		&numAudioLinks,	0,	"# multilink aud systems",	"0=silence or 1-4"			},
 		POPT_AUTOHELP
@@ -98,7 +100,8 @@ int main (int argc, const char ** argv)
 		config.fNumAudioLinks = UWord(numAudioLinks);
 
 	config.fWithAudio		= config.fNumAudioLinks ? true : false;	//	Enable audio if numLinks > 0, disable if zero
-    config.fDoTSIRouting	= false; //!doQuadRouting;						//	TSI?
+	config.fEnable4K		= enable4K ? true : false;				//	Enable 4K/UHD mode?
+	config.fDoTSIRouting	= enable4K ? !doQuadRouting : false;	//	TSI routing if 4K enabled (unless --squares specified)
 	config.fWithAnc			= true;									//	Always capture anc
 	config.fDoMultiFormat	= doMultiFormat ? true : false;			//	Multiformat mode?
 
