@@ -77,7 +77,7 @@ int main (int argc, const char ** argv)
 
 	//	VideoFormat
 	const string videoFormatStr (pVideoFormat  ?  pVideoFormat  :  "");
-	config.fVideoFormat = videoFormatStr.empty()	?	NTV2_FORMAT_1080i_5994
+	config.fVideoFormat = videoFormatStr.empty()	?	NTV2_FORMAT_1080p_2400
 													:	CNTV2DemoCommon::GetVideoFormatFromString(videoFormatStr, VIDEO_FORMATS_ALL, deviceSpec);
 	if (videoFormatStr == "?"  ||  videoFormatStr == "list")
 		{cout	<< CNTV2DemoCommon::GetVideoFormatStrings(VIDEO_FORMATS_ALL, pDeviceSpec ? deviceSpec : "") << endl;  return 0;}
@@ -89,7 +89,7 @@ int main (int argc, const char ** argv)
 
 	//	Pixel Format
 	const string pixelFormatStr (pPixelFormat  ?  pPixelFormat  :  "");
-	config.fPixelFormat = pixelFormatStr.empty() ? NTV2_FBF_8BIT_YCBCR : CNTV2DemoCommon::GetPixelFormatFromString(pixelFormatStr);
+	config.fPixelFormat = pixelFormatStr.empty() ? NTV2_FBF_10BIT_YCBCR : CNTV2DemoCommon::GetPixelFormatFromString(pixelFormatStr);
 	if (pixelFormatStr == "?"  ||  pixelFormatStr == "list")
 		{cout << CNTV2DemoCommon::GetPixelFormatStrings(PIXEL_FORMATS_ALL, pDeviceSpec ? deviceSpec : "") << endl;  return 0;}
 	else if (!pixelFormatStr.empty()  &&  !NTV2_IS_VALID_FRAME_BUFFER_FORMAT(config.fPixelFormat))

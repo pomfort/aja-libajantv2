@@ -13,6 +13,8 @@
 #include "ajabase/system/thread.h"
 #include "ajabase/common/timecodeburn.h"
 
+#include "../../../pomfort_common.hpp"
+
 
 /**
 	@brief	I play out SD or HD test pattern (with timecode) to an output of an AJA device with or without
@@ -94,6 +96,8 @@ class NTV2Player
 	//	Private Member Data
 	private:
 		typedef std::vector<NTV2Buffer>	NTV2Buffers;
+
+		void				RemapTimecodes (NTV2FrameData* pFrameData);	///< @brief	Remap loaded timecodes to configured TC indexes
 
 		PlayerConfig		mConfig;			///< @brief	My operating configuration
 		AJAThread			mConsumerThread;	///< @brief	My playout (consumer) thread object

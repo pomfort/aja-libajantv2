@@ -12,6 +12,7 @@
 #include "ntv2democommon.h"
 #include "ajabase/system/thread.h"
 
+#include "../../../pomfort_common.hpp"
 
 /**
 	@brief	Instances of me capture frames in real time from a video signal provided to an input of an AJA device.
@@ -135,6 +136,9 @@ class NTV2Capture4K
 		NTV2ChannelSet		mActiveFrameStores;	///< @brief	Active FrameStores/Channels
 		NTV2ChannelSet		mActiveSDIs;		///< @brief	Active SDI/HDMI input connectors
 		ULWord				mACOptions;			///< @brief	AutoCirculate options
+
+        PomfortCommon::SaveToFileFrameConsumer *mFrameConsumer;
+        std::string mCaptureDirectory;
 
 };	//	NTV2Capture4K
 

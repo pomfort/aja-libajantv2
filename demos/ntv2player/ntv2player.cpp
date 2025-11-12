@@ -18,9 +18,17 @@
 #include "ajaanc/includes/ancillarydata_hdr_hlg.h"
 #include <fstream>	//	For ifstream
 
+// For file-based playback
+#include "../../../pomfort_common.hpp"
+
 using namespace std;
 
 //#define NTV2_BUFFER_LOCKING		//	Define this to pre-lock video/audio buffers in kernel
+
+// File-based playback configuration
+// Set USE_FILE_PLAYBACK to 1 to play from files, 0 to generate test patterns
+#define USE_FILE_PLAYBACK 1
+#define FILE_PLAYBACK_DIRECTORY "/tmp/aja-capture"  // Directory containing frame-XXXXXXXXXX subdirs
 
 //	Convenience macros for EZ logging:
 #define	TCFAIL(_expr_)	AJA_sERROR  (AJA_DebugUnit_TimecodeGeneric, AJAFUNC << ": " << _expr_)
@@ -143,8 +151,8 @@ AJAStatus NTV2Player::Init (void)
 	if (!mConfig.fDoMultiFormat)
 	{
 		mDevice.GetEveryFrameServices(mSavedTaskMode);		//	Save the current task mode
-		if (!mDevice.AcquireStreamForApplication (kDemoAppSignature, int32_t(AJAProcess::GetPid())))
-			return AJA_STATUS_BUSY;		//	Device is in use by another app -- fail
+//		if (!mDevice.AcquireStreamForApplication (kDemoAppSignature, int32_t(AJAProcess::GetPid())))
+//			return AJA_STATUS_BUSY;		//	Device is in use by another app -- fail
 	}
 	mDevice.SetEveryFrameServices(NTV2_OEM_TASKS);			//	Set OEM service level
 
@@ -152,6 +160,19 @@ AJAStatus NTV2Player::Init (void)
 		mDevice.SetMultiFormatMode(mConfig.fDoMultiFormat);
 	else
 		mConfig.fDoMultiFormat = false;
+
+#if USE_FILE_PLAYBACK
+	//	Load captured video format and override CLI configuration
+	NTV2VideoFormat capturedFormat = PomfortCommon::restoreVideoFormat(FILE_PLAYBACK_DIRECTORY);
+	if (capturedFormat != NTV2_FORMAT_UNKNOWN) {
+		cerr << "## INFO:  Overriding video format from captured data: "
+		     << ::NTV2VideoFormatToString(capturedFormat) << endl;
+		mConfig.fVideoFormat = capturedFormat;
+	} else {
+		cerr << "## WARNING:  Could not load captured video format from " << FILE_PLAYBACK_DIRECTORY
+		     << ", using CLI configuration" << endl;
+	}
+#endif
 
 	//	Set up the video and audio...
 	status = SetUpVideo();
@@ -311,6 +332,11 @@ AJAStatus NTV2Player::SetUpHostBuffers (void)
 	//	Let my circular buffer know when it's time to quit...
 	mFrameDataRing.SetAbortFlag (&mGlobalQuit);
 
+	//	Determine per-field max Anc buffer size...
+	ULWord ancBuffSizeBytes (0);
+	if (!mDevice.GetAncRegionOffsetFromBottom (ancBuffSizeBytes, NTV2_AncRgn_Field2))
+		ancBuffSizeBytes = NTV2_ANCSIZE_MAX;
+
 	//	Allocate and add each in-host NTV2FrameData to my circular buffer member variable...
 	mHostBuffers.reserve(CIRCULAR_BUFFER_SIZE);
 	while (mHostBuffers.size() < CIRCULAR_BUFFER_SIZE)
@@ -341,6 +367,27 @@ AJAStatus NTV2Player::SetUpHostBuffers (void)
 		if (frameData.fAudioBuffer)
 			mDevice.DMABufferLock(frameData.fAudioBuffer, /*alsoPreLockSGL*/true);
 		#endif
+
+		//	Allocate page-aligned anc buffers (for ANC insertion)...
+		if (!frameData.fAncBuffer.Allocate (ancBuffSizeBytes, /*pageAligned*/true))
+		{
+			PLFAIL("Failed to allocate " << xHEX0N(ancBuffSizeBytes,8) << "-byte anc buffer");
+			return AJA_STATUS_MEMORY;
+		}
+		//	Allocate field 2 anc buffer only for interlaced formats...
+		if (!::IsProgressivePicture(mConfig.fVideoFormat))
+			if (!frameData.fAncBuffer2.Allocate(ancBuffSizeBytes, /*pageAligned*/true))
+			{
+				PLFAIL("Failed to allocate " << xHEX0N(ancBuffSizeBytes,8) << "-byte F2 anc buffer");
+				return AJA_STATUS_MEMORY;
+			}
+		#ifdef NTV2_BUFFER_LOCKING
+		if (frameData.fAncBuffer)
+			mDevice.DMABufferLock(frameData.fAncBuffer, true);
+		if (frameData.fAncBuffer2)
+			mDevice.DMABufferLock(frameData.fAncBuffer2, true);
+		#endif
+
 		mFrameDataRing.Add (&frameData);
 	}	//	for each NTV2FrameData
 
@@ -499,7 +546,7 @@ static uint64_t sTotalAncFileBytes(0), sCurrentAncFileBytes(0);
 
 void NTV2Player::ConsumeFrames (void)
 {
-	ULWord					acOptions (AUTOCIRCULATE_WITH_RP188);
+	ULWord					acOptions (AUTOCIRCULATE_WITH_RP188 | AUTOCIRCULATE_WITH_ANC);
 	AUTOCIRCULATE_TRANSFER	outputXfer;
 	AUTOCIRCULATE_STATUS	outputStatus;
 	AJAAncillaryData *		pPkt (AJA_NULL);
@@ -609,6 +656,11 @@ void NTV2Player::ConsumeFrames (void)
 			if (pFrameData->AudioBuffer())	//	If also playing audio...
 				outputXfer.SetAudioBuffer (pFrameData->AudioBuffer(), pFrameData->fNumAudioBytes);
 
+			//	Set ANC buffers from frameData (if present)...
+			if (pFrameData->AncBuffer() || pFrameData->AncBuffer2())
+				outputXfer.SetAncBuffers (pFrameData->AncBuffer(), pFrameData->AncBufferSize(),
+										  pFrameData->AncBuffer2(), pFrameData->AncBuffer2Size());
+
 			if (pAncStrm  &&  pAncStrm->good()  &&  outputXfer.acANCBuffer)
 			{	//	Read pre-recorded anc from binary data file, and inject it into this frame...
 				pAncStrm->read(outputXfer.acANCBuffer, streamsize(outputXfer.acANCBuffer.GetByteCount()));
@@ -680,6 +732,48 @@ void NTV2Player::ProducerThreadStatic (AJAThread * pThread, void * pContext)	//	
 
 void NTV2Player::ProduceFrames (void)
 {
+#if USE_FILE_PLAYBACK
+	// File-based playback mode
+	PLNOTE("Thread started - FILE PLAYBACK MODE from: " << FILE_PLAYBACK_DIRECTORY);
+	PLNOTE("Original TC Indexes: " << mTCIndexes);
+
+	// Override mTCIndexes with captured TC indexes to preserve original signal
+	NTV2TCIndexes capturedTCIndexes = PomfortCommon::restoreTCIndexes(FILE_PLAYBACK_DIRECTORY);
+	if (!capturedTCIndexes.empty())
+	{
+		mTCIndexes = capturedTCIndexes;
+		PLNOTE("Using captured TC Indexes: " << mTCIndexes);
+	}
+
+	PomfortCommon::OpenFromFileFrameProducer fileProducer(mDevice, mConfig.fVideoFormat, FILE_PLAYBACK_DIRECTORY);
+	ULWord badTally(0);
+
+	while (!mGlobalQuit)
+	{
+		NTV2FrameData* pFrameData = mFrameDataRing.StartProduceNextBuffer();
+		if (!pFrameData)
+		{
+			badTally++;
+			AJATime::Sleep(10);  // Wait for consumer thread to free a buffer
+			continue;
+		}
+
+		// Create a consumer that will copy the loaded frame into pFrameData
+		auto copyConsumer = std::make_shared<PomfortCommon::CopyFrameConsumer>(pFrameData);
+
+		// Load frame from file and copy it into pFrameData
+		fileProducer.consumeWhenFrameIsReady(copyConsumer);
+
+		// Remap timecodes to match configured output TC indexes
+		RemapTimecodes(pFrameData);
+
+		// Signal that the frame is ready for playout
+		mFrameDataRing.EndProduceNextBuffer();
+	}
+
+	PLNOTE("Thread completed - FILE PLAYBACK: " << DEC(badTally) << " buffer starvation events");
+#else
+	// Test pattern generation mode (original code)
 	ULWord	freqNdx(0), testPatNdx(0), badTally(0);
 	double	timeOfLastSwitch	(0.0);
 
@@ -690,7 +784,7 @@ void NTV2Player::ProduceFrames (void)
 	const NTV2FrameRate		ntv2FrameRate	(::GetNTV2FrameRateFromVideoFormat(mConfig.fVideoFormat));
 	const TimecodeFormat	tcFormat		(CNTV2DemoCommon::NTV2FrameRate2TimecodeFormat(ntv2FrameRate));
 
-	PLNOTE("Thread started");
+	PLNOTE("Thread started - TEST PATTERN MODE");
 	while (!mGlobalQuit)
 	{
 		NTV2FrameData *	pFrameData (mFrameDataRing.StartProduceNextBuffer());
@@ -752,9 +846,51 @@ void NTV2Player::ProduceFrames (void)
 		mFrameDataRing.EndProduceNextBuffer();
 
 	}	//	loop til mGlobalQuit goes true
-	PLNOTE("Thread completed: " << DEC(mCurrentFrame) << " frame(s) produced, " << DEC(badTally) << " failed");
+	PLNOTE("Thread completed - TEST PATTERN: " << DEC(mCurrentFrame) << " frame(s) produced, " << DEC(badTally) << " failed");
+#endif  // USE_FILE_PLAYBACK
 
 }	//	ProduceFrames
+
+
+void NTV2Player::RemapTimecodes (NTV2FrameData* pFrameData)
+{
+	if (!pFrameData || mTCIndexes.empty())
+		return;
+
+	// If the loaded timecodes already match what we need, we're done
+	bool allPresent = true;
+	for (const auto& tcIndex : mTCIndexes)
+	{
+		if (pFrameData->fTimecodes.find(tcIndex) == pFrameData->fTimecodes.end())
+		{
+			allPresent = false;
+			break;
+		}
+	}
+
+	if (allPresent)
+		return;	// All configured TC indexes are already present
+
+	// Find any available timecode from the loaded frame
+	NTV2_RP188 availableTC;
+	bool foundTC = false;
+	if (!pFrameData->fTimecodes.empty())
+	{
+		availableTC = pFrameData->fTimecodes.begin()->second;
+		foundTC = true;
+	}
+
+	if (!foundTC)
+		return;	// No timecodes to remap
+
+	// Copy the available timecode to all configured TC indexes
+	// PLINFO("Remapping timecode to configured indexes");
+	for (const auto& tcIndex : mTCIndexes)
+	{
+		pFrameData->fTimecodes[tcIndex] = availableTC;
+		// PLINFO("  Set TC Index " << tcIndex);
+	}
+}	//	RemapTimecodes
 
 
 uint32_t NTV2Player::AddTone (NTV2FrameData & inFrameData)

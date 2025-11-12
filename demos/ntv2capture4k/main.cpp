@@ -68,7 +68,7 @@ int main (int argc, const char ** argv)
 
 	//	Pixel Format
 	const string pixelFormatStr (pPixelFormat  ?  pPixelFormat  :  "");
-	config.fPixelFormat = pixelFormatStr.empty() ? NTV2_FBF_8BIT_YCBCR : CNTV2DemoCommon::GetPixelFormatFromString(pixelFormatStr);
+	config.fPixelFormat = pixelFormatStr.empty() ? NTV2_FBF_10BIT_YCBCR : CNTV2DemoCommon::GetPixelFormatFromString(pixelFormatStr);
 	if (pixelFormatStr == "?"  ||  pixelFormatStr == "list")
 		{cout << CNTV2DemoCommon::GetPixelFormatStrings(PIXEL_FORMATS_ALL, pDeviceSpec ? deviceSpec : "") << endl;  return 0;}
 	else if (!pixelFormatStr.empty()  &&  !NTV2_IS_VALID_FRAME_BUFFER_FORMAT(config.fPixelFormat))
@@ -87,7 +87,7 @@ int main (int argc, const char ** argv)
 		config.fNumAudioLinks = UWord(numAudioLinks);
 
 	config.fWithAudio		= config.fNumAudioLinks ? true : false;	//	Enable audio if numLinks > 0, disable if zero
-	config.fDoTSIRouting	= !doQuadRouting;						//	TSI?
+    config.fDoTSIRouting	= false; //!doQuadRouting;						//	TSI?
 	config.fWithAnc			= true;									//	Always capture anc
 	config.fDoMultiFormat	= doMultiFormat ? true : false;			//	Multiformat mode?
 
