@@ -100,7 +100,7 @@ void NTV2Player4K::Quit (void)
 	{
 		mDevice.ReleaseStreamForApplication (kDemoAppSignature, int32_t(AJAProcess::GetPid()));
 		if (NTV2_IS_VALID_TASK_MODE(mSavedTaskMode))
-			mDevice.SetEveryFrameServices(mSavedTaskMode);		//	Restore prior task mode
+			mDevice.SetTaskMode(mSavedTaskMode);		//	Restore prior task mode
 	}
 }	//	Quit
 
@@ -154,11 +154,11 @@ AJAStatus NTV2Player4K::Init (void)
 
 	if (!mConfig.fDoMultiFormat)
 	{
-		mDevice.GetEveryFrameServices(mSavedTaskMode);		//	Save the current task mode
+		mDevice.GetTaskMode(mSavedTaskMode);		//	Save the current task mode
 //		if (!mDevice.AcquireStreamForApplication (kDemoAppSignature, int32_t(AJAProcess::GetPid())))
 //			return AJA_STATUS_BUSY;		//	Device is in use by another app -- fail
 	}
-	mDevice.SetEveryFrameServices(NTV2_OEM_TASKS);			//	Set OEM service level
+	mDevice.SetTaskMode(NTV2_OEM_TASKS);			//	Set OEM service level
 
 	if (mDevice.features().CanDoMultiFormat())
 		mDevice.SetMultiFormatMode(mConfig.fDoMultiFormat);
@@ -276,11 +276,10 @@ AJAStatus NTV2Player4K::SetUpVideo (void)
 AJAStatus NTV2Player4K::SetUpAudio (void)
 {
 	uint16_t numAudioChannels (mDevice.features().GetMaxAudioChannels());
-
-	//	If there are 4096 pixels on a line instead of 3840, reduce the number of audio channels
-	//	This is because HANC is narrower, and has space for only 8 channels
-	if (NTV2_IS_4K_4096_VIDEO_FORMAT(mConfig.fVideoFormat)  &&  numAudioChannels > 8)
-		numAudioChannels = 8;
+	if (numAudioChannels > 8)										//	If audio system handles more than 8 channels...
+		if (!mDevice.features().CanDo2110())						//	...and SDI (i.e. not ST 2110 IP streaming)...
+			if (NTV2_IS_4K_4096_VIDEO_FORMAT(mConfig.fVideoFormat))	//	...and 4K (narrower HANC only fits 8 audio channels)
+				numAudioChannels = 8;	//	...then reduce to 8 audio channels
 
 	//	Use the NTV2AudioSystem that has the same ordinal value as the output FrameStore/Channel...
 	mAudioSystem = ::NTV2ChannelToAudioSystem(mConfig.fOutputChannel);
@@ -698,7 +697,7 @@ bool NTV2Player4K::RouteHDMIOutput (void)
 	{
 		if (mDevice.features().CanDo12gRouting())
 		{
-			if (!mDevice.Connect (NTV2_XptHDMIOutInput, ::GetFrameBufferOutputXptFromChannel (mConfig.fOutputChannel,  isRGB,  false/*is425*/), canVerify))
+			if (!mDevice.Connect (NTV2_XptHDMIOutInput, ::GetFrameStoreOutputXptFromChannel (mConfig.fOutputChannel,  isRGB,  false/*is425*/), canVerify))
 				connectFailures++;
 		}
 		else if(mConfig.fDoTsiRouting)
@@ -877,7 +876,7 @@ bool NTV2Player4K::RouteFsToSDIOut (void)
 	if (mDevice.features().CanDo12gRouting())
 	{
 		if (!mDevice.Connect (	::GetSDIOutputInputXpt (mConfig.fOutputChannel, false/*isDS2*/),
-								::GetFrameBufferOutputXptFromChannel (mConfig.fOutputChannel,  false/*isRGB*/,  false/*is425*/),
+								::GetFrameStoreOutputXptFromChannel (mConfig.fOutputChannel,  false/*isRGB*/,  false/*is425*/),
 								canVerify))
 			connectFailures++;
 	}

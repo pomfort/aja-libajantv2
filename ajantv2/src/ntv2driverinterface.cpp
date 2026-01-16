@@ -70,31 +70,33 @@ bool CNTV2DriverInterface::GetOverlappedMode (void) {return gOverlappedMode;}
 /////////////// INSTANCE METHODS
 
 CNTV2DriverInterface::CNTV2DriverInterface ()
-	:	_boardNumber					(0),
-		_boardID						(DEVICE_ID_NOTFOUND),
-		_boardOpened					(false),
+	:	_boardNumber					(0)
+		,_boardID						(DEVICE_ID_NOTFOUND)
+		,_boardOpened					(false)
 #if defined(NTV2_WRITEREG_PROFILING)
-		mRecordRegWrites				(false),
-		mSkipRegWrites					(false),
+		,mRecordRegWrites				(false)
+		,mSkipRegWrites					(false)
 #endif
-		_programStatus					(0),
-		_pRPCAPI						(AJA_NULL),
-		mInterruptEventHandles			(),
-		mEventCounts					(),
+		,_programStatus					(0)
+		,_pRPCAPI						(AJA_NULL)
+		,mInterruptEventHandles			()
+		,mEventCounts					()
 #if defined(NTV2_WRITEREG_PROFILING)
-		mRegWrites						(),
-		mRegWritesLock					(),
+		,mRegWrites						()
+		,mRegWritesLock					()
 #endif	//	NTV2_WRITEREG_PROFILING
 #if !defined(NTV2_DEPRECATE_16_0)
-		_pFrameBaseAddress				(AJA_NULL),
-		_pRegisterBaseAddress			(AJA_NULL),
-		_pRegisterBaseAddressLength		(0),
-		_pXena2FlashBaseAddress			(AJA_NULL),
-		_pCh1FrameBaseAddress			(AJA_NULL),
-		_pCh2FrameBaseAddress			(AJA_NULL),
+		,_pFrameBaseAddress				(AJA_NULL)
+		,_pRegisterBaseAddress			(AJA_NULL)
+		,_pRegisterBaseAddressLength	(0)
+		,_pXena2FlashBaseAddress		(AJA_NULL)
+		,_pCh1FrameBaseAddress			(AJA_NULL)
+		,_pCh2FrameBaseAddress			(AJA_NULL)
 #endif	//	!defined(NTV2_DEPRECATE_16_0)
-		_ulNumFrameBuffers				(0),
-		_ulFrameBufferSize				(0)
+#if !defined(NTV2_DEPRECATE_17_2)
+		,_ulNumFrameBuffers				(0)
+		,_ulFrameBufferSize				(0)
+#endif//!defined(NTV2_DEPRECATE_17_2)
 #if !defined(NTV2_DEPRECATE_16_0)
 		,_pciSlot						(0)			//	DEPRECATE!
 #endif	//	!defined(NTV2_DEPRECATE_16_0)
@@ -130,13 +132,27 @@ CNTV2DriverInterface::CNTV2DriverInterface (const CNTV2DriverInterface & inObjTo
 //	Open local physical device (via ajantv2 driver)
 bool CNTV2DriverInterface::Open (const UWord inDeviceIndex)
 {
-	if (IsOpen()  &&  inDeviceIndex == _boardNumber)
+	if (IsOpen()  &&  inDeviceIndex == GetIndexNumber())
 		return true;	//	Same local device requested, already open
 	Close();
 	if (inDeviceIndex >= MaxNumDevices())
 		{DIFAIL("Requested device index '" << DEC(inDeviceIndex) << "' at/past limit of '" << DEC(MaxNumDevices()) << "'"); return false;}
 	if (!OpenLocalPhysical(inDeviceIndex))
-		return false;
+	{
+		//	Check for virtual device...
+		static ULWord sRecursionCheck(0), RECURSION_LIMIT(32);
+		NTV2DeviceInfo info;
+		if (!CNTV2DeviceScanner::GetDeviceInfo (inDeviceIndex, info))
+			return false;
+		sRecursionCheck++;	//	increment
+		if (sRecursionCheck > RECURSION_LIMIT)
+			{DIFAIL("Failed: " << DEC(RECURSION_LIMIT) << " '.vdev' bounces -- limit exceeded"); return false;}
+		if (!Open(info.vdevUrl))
+			{sRecursionCheck--;  return false;}	//	Open vdev urlSpec failed
+		setDeviceIndexNumber(UWord(info.deviceIndex));	//	Patch _boardNumber
+		sRecursionCheck--;	//	decrement
+		return true;
+	}	//	if OpenLocalPhysical failed
 
 #if !defined(NTV2_ALLOW_OPEN_UNSUPPORTED)
 	//	Check if device is officially supported...
@@ -413,10 +429,6 @@ NTV2DeviceID CNTV2DriverInterface::GetDeviceID (void)
 	ULWord value(0);
 	if (IsOpen()  &&  ReadRegister(kRegBoardID, value))
 	{
-#if 0	//	Fake out:
-	if (value == ULWord(DEVICE_ID_CORVID88))	//	Pretend a Corvid88 is a TTapPro
-		value = ULWord(DEVICE_ID_TTAP_PRO);
-#endif
 		const NTV2DeviceID currentValue(NTV2DeviceID(value+0));
 		if (currentValue != _boardID)
 			DIWARN(xHEX0N(this,16) << ":  NTV2DeviceID " << xHEX0N(value,8) << " (" << ::NTV2DeviceIDToString(currentValue)
@@ -705,6 +717,10 @@ bool CNTV2DriverInterface::DriverGetBitFileInformation (BITFILE_INFO_STRUCT & bi
 		case DEVICE_ID_KONAX:						bitFileInfo.bitFileType = NTV2_BITFILE_KONAX;						break;
 		case DEVICE_ID_KONAXM:						bitFileInfo.bitFileType = NTV2_BITFILE_KONAXM;						break;
         case DEVICE_ID_KONAIP_25G:					bitFileInfo.bitFileType = NTV2_BITFILE_KONAIP_25G;					break;
+    case DEVICE_ID_IP25_T:
+		case DEVICE_ID_IP25_R:						bitFileInfo.bitFileType = NTV2_BITFILE_TYPE_INVALID;				break;
+		case DEVICE_ID_CORVID44_GEN3:				bitFileInfo.bitFileType = NTV2_BITFILE_CORVID44_GEN3;				break;
+		case DEVICE_ID_CORVID88_GEN3:				bitFileInfo.bitFileType = NTV2_BITFILE_CORVID44_GEN3;				break;
 		case DEVICE_ID_SOFTWARE:
 		case DEVICE_ID_NOTFOUND:					bitFileInfo.bitFileType = NTV2_BITFILE_TYPE_INVALID;				break;
 	#if !defined (_DEBUG)
@@ -732,7 +748,7 @@ bool CNTV2DriverInterface::GetPackageInformation (PACKAGE_INFO_STRUCT & packageI
 
 	if (CNTV2AxiSpiFlash::DeviceSupported(NTV2DeviceID(deviceID)))
 	{
-		CNTV2AxiSpiFlash spiFlash(_boardNumber, false);
+		CNTV2AxiSpiFlash spiFlash(GetIndexNumber(), false);
 
 		uint32_t offset = spiFlash.Offset(SPI_FLASH_SECTION_MCSINFO);
 		vector<uint8_t> mcsInfoData;
@@ -907,6 +923,24 @@ bool CNTV2DriverInterface::StreamBufferOps (const NTV2Channel inChannel,
 	return NTV2Message(status);
 }
 
+bool CNTV2DriverInterface::MailBufferOps (const NTV2Channel inChannel,
+										  NTV2Buffer& inBuffer,
+                                          ULWord dataSize,
+                                          ULWord flags,
+                                          ULWord delay,
+                                          ULWord timeout,
+                                          NTV2MailBuffer& status)
+{
+	status.mChannel = inChannel;
+	status.mBuffer.Set (inBuffer.GetHostPointer(), inBuffer.GetByteCount());
+	status.mDataSize = dataSize;
+	status.mDelay = delay;
+	status.mTimeout = timeout;
+	status.mFlags = flags;
+
+	return NTV2Message(status);
+}
+
 // FinishOpen
 // NOTE _boardID must be set before calling this routine.
 void CNTV2DriverInterface::FinishOpen (void)
@@ -918,8 +952,10 @@ void CNTV2DriverInterface::FinishOpen (void)
 	ReadRegister (kRegCh1Control, val1, kRegMaskFrameFormat, kRegShiftFrameFormat); //	Read PixelFormat
 	ReadRegister (kRegCh1Control, val2, kRegMaskFrameFormatHiBit, kRegShiftFrameFormatHiBit);
 	NTV2PixelFormat pf(NTV2PixelFormat((val1 & 0x0F) | ((val2 & 0x1) << 4)));
+#if !defined(NTV2_DEPRECATE_17_2)
 	_ulFrameBufferSize = ::NTV2DeviceGetFrameBufferSize(_boardID, fg, pf);
 	_ulNumFrameBuffers = ::NTV2DeviceGetNumberFrameBuffers(_boardID, fg, pf);
+#endif//!defined(NTV2_DEPRECATE_17_2)
 
 	ULWord returnVal1 = false;
 	ULWord returnVal2 = false;
@@ -1029,6 +1065,11 @@ bool CNTV2DriverInterface::ReadFlashULWord (const ULWord inAddress, ULWord & out
 	if (!timeoutCount)
 		return false;
 	return ReadRegister(kRegXenaxFlashDOUT, outValue);
+}
+
+void CNTV2DriverInterface::setDeviceIndexNumber (const UWord num)
+{
+	_boardNumber = num;
 }
 
 
@@ -1164,17 +1205,19 @@ bool CNTV2DriverInterface::GetStreamingApplication (ULWord & outAppType, int32_t
 string CNTV2DriverInterface::GetDescription (void) const
 {
 	if (!IsRemote())
-		return "";
+		return "";	//	This implementation is intended for remote/plugin devices
 	string desc(_pRPCAPI->Description());
-	const NTV2Dictionary parms(ConnectParams());
-	if (desc.empty()  &&  !parms.empty())
-	{
+	if (desc.empty())
+	{	//	Plugin/remote device didn't provide description
+		const NTV2Dictionary parms(ConnectParams());
 		NTV2StringList strs;
 		if (parms.hasKey(kNTV2PluginRegInfoKey_LongName))
-			strs.push_back("\"" + parms.valueForKey(kNTV2PluginRegInfoKey_LongName) + "\" plugin");
+			strs.push_back("\"" + parms.valueForKey(kNTV2PluginRegInfoKey_LongName) + "\"");
+		else if (parms.hasKey(kNTV2PluginRegInfoKey_ShortName))
+			strs.push_back(parms.valueForKey(kNTV2PluginRegInfoKey_ShortName));
 		if (parms.hasKey(kNTV2PluginRegInfoKey_Description))
 			strs.push_back(parms.valueForKey(kNTV2PluginRegInfoKey_Description));
-		if (parms.hasKey(kNTV2PluginRegInfoKey_Copyright))
+		else if (parms.hasKey(kNTV2PluginRegInfoKey_Copyright))
 			strs.push_back(parms.valueForKey(kNTV2PluginRegInfoKey_Copyright));
 		else if (parms.hasKey(kNTV2PluginRegInfoKey_Vendor))
 			strs.push_back(parms.valueForKey(kNTV2PluginRegInfoKey_Vendor));
@@ -1437,8 +1480,11 @@ ULWordSet CNTV2DriverInterface::GetSupportedItems (const NTV2EnumsID inEnumsID)
 	ULWordSet result;
 	if (!IsOpen())
 		return result;
+
+	//	Remote/virtual device gets first dibs on answering...
 	if (IsRemote()  &&  _pRPCAPI->NTV2GetSupportedRemote (inEnumsID, result))
 		return result;
+
 	const NTV2DeviceID devID(GetDeviceID());
 	switch (inEnumsID)
 	{
@@ -1578,22 +1624,24 @@ ULWordSet CNTV2DriverInterface::GetSupportedItems (const NTV2EnumsID inEnumsID)
 
 bool CNTV2DriverInterface::GetBoolParam (const ULWord inParamID, ULWord & outValue)
 {
-	const NTV2BoolParamID paramID (NTV2BoolParamID(inParamID+0));
+	//	Remote/virtual device gets first dibs on answering...
+	if (IsRemote()  &&  _pRPCAPI->NTV2GetBoolParamRemote (inParamID, outValue))
+		return true;
 
 	//	Is there a register/bit that will answer this query?
-	{	NTV2RegInfo regInfo;
-		bool value (false);
-		if (GetRegInfoForBoolParam (paramID, regInfo))
+	const NTV2BoolParamID paramID (NTV2BoolParamID(inParamID+0));
+	{	NTV2RegInfo regInfo;   bool invertSense(false);
+		if (GetRegInfoForBoolParam (paramID, regInfo, invertSense))
 		{
-			if (!ReadRegister (regInfo.registerNumber, value, regInfo.registerMask, regInfo.registerShift))
+			if (!ReadRegister (regInfo.registerNumber, regInfo.registerValue, regInfo.registerMask, regInfo.registerShift))
 				return false;
-			outValue = value ? 1 : 0;
+			if (invertSense)
+				outValue = regInfo.registerValue ? 0 : 1;
+			else
+				outValue = regInfo.registerValue ? 1 : 0;
 			return true;
 		}
 	}
-	//	Ask the remote/virtual device?
-	if (IsRemote()  &&  _pRPCAPI->NTV2GetBoolParamRemote (inParamID, outValue))
-		return true;
 
 	//	Call classic device features function...
 	const NTV2DeviceID devID (GetDeviceID());
@@ -1648,6 +1696,7 @@ bool CNTV2DriverInterface::GetBoolParam (const ULWord inParamID, ULWord & outVal
 		case kDeviceCanDoDVCProHD:					outValue = ::NTV2DeviceCanDoDVCProHD(devID);						break;	//	Deprecate?
 		case kDeviceCanDoEnhancedCSC:				outValue = ::NTV2DeviceCanDoEnhancedCSC(devID);						break;	//	Deprecate?
 		case kDeviceCanDoFrameStore1Display:		outValue = ::NTV2DeviceCanDoFrameStore1Display(devID);				break;	//	Deprecate?
+		case kDeviceCanDoGPIO:						outValue = ::NTV2DeviceCanDoGPIO(devID);							break;
 		case kDeviceCanDoHDMIOutStereo:				outValue = ::NTV2DeviceCanDoHDMIOutStereo(devID);					break;	//	Deprecate?
 		case kDeviceCanDoHDV:						outValue = ::NTV2DeviceCanDoHDV(devID);								break;	//	Deprecate?
 		case kDeviceCanDoHDVideo:					outValue = ::NTV2DeviceCanDoHDVideo(devID);							break;	//	Deprecate?
@@ -1680,6 +1729,7 @@ bool CNTV2DriverInterface::GetBoolParam (const ULWord inParamID, ULWord & outVal
 		case kDeviceCanMeasureTemperature:			outValue = ::NTV2DeviceCanMeasureTemperature(devID);				break;
 		case kDeviceCanReportFrameSize:				outValue = ::NTV2DeviceCanReportFrameSize(devID);					break;
 		case kDeviceHasBiDirectionalSDI:			outValue = ::NTV2DeviceHasBiDirectionalSDI(devID);					break;
+		case kDeviceHasBracketLED:					outValue = ::NTV2DeviceHasBracketLED(devID);						break;
 		case kDeviceHasColorSpaceConverterOnChannel2:	outValue = ::NTV2DeviceCanDoWidget(devID, NTV2_WgtCSC2);		break;	//	Deprecate?
 		case kDeviceHasIDSwitch:					outValue = ::NTV2DeviceCanDoIDSwitch(devID);						break;
         case kDeviceHasNTV4FrameStores:				outValue = ::NTV2DeviceHasNTV4FrameStores(devID);                   break;
@@ -1723,8 +1773,8 @@ bool CNTV2DriverInterface::GetBoolParam (const ULWord inParamID, ULWord & outVal
 		case kDeviceCanReportRunningFirmwareDate:	outValue = ::NTV2DeviceCanReportRunningFirmwareDate(devID);			break;
 		case kDeviceHasAudioMonitorRCAJacks:		outValue = ::NTV2DeviceHasAudioMonitorRCAJacks(devID);				break;
 		case kDeviceHasBiDirectionalAnalogAudio:	outValue = ::NTV2DeviceHasBiDirectionalAnalogAudio(devID);			break;
-		case kDeviceHasGenlockv2:					outValue = ::NTV2DeviceGetGenlockVersion(devID) == 2;				break;
-		case kDeviceHasGenlockv3:					outValue = ::NTV2DeviceGetGenlockVersion(devID) == 3;				break;
+		case kDeviceHasGenlockv2:					outValue = GetNumSupported(kDeviceGetGenlockVersion) == 2;			break;	//	Deprecate
+		case kDeviceHasGenlockv3:					outValue = GetNumSupported(kDeviceGetGenlockVersion) == 3;			break;	//	Deprecate
 		case kDeviceHasHeadphoneJack:				outValue = ::NTV2DeviceHasHeadphoneJack(devID);						break;
 		case kDeviceHasLEDAudioMeters:				outValue = ::NTV2DeviceHasLEDAudioMeters(devID);					break;
 		case kDeviceHasRotaryEncoder:				outValue = ::NTV2DeviceHasRotaryEncoder(devID);						break;
@@ -1751,17 +1801,18 @@ bool CNTV2DriverInterface::GetBoolParam (const ULWord inParamID, ULWord & outVal
 
 bool CNTV2DriverInterface::GetNumericParam (const ULWord inParamID, ULWord & outVal)
 {
-	const NTV2NumericParamID paramID (NTV2NumericParamID(inParamID+0));
 	outVal = 0;
 
+	//	Remote/virtual device gets first dibs on answering...
+	if (IsRemote()  &&  _pRPCAPI->NTV2GetNumericParamRemote (inParamID, outVal))
+		return true;
+
 	//	Is there a register that will answer this query?
+	const NTV2NumericParamID paramID (NTV2NumericParamID(inParamID+0));
 	{	NTV2RegInfo regInfo;
 		if (GetRegInfoForNumericParam (paramID, regInfo))
 			return ReadRegister (regInfo.registerNumber, outVal, regInfo.registerMask, regInfo.registerShift);
 	}
-	//	Ask the remote/virtual device?
-	if (IsRemote()  &&  _pRPCAPI->NTV2GetNumericParamRemote (inParamID, outVal))
-		return true;
 
 	//	Call classic device features function...
 	const NTV2DeviceID devID (GetDeviceID());
@@ -1770,16 +1821,14 @@ bool CNTV2DriverInterface::GetNumericParam (const ULWord inParamID, ULWord & out
 		case kDeviceGetActiveMemorySize:				outVal = ::NTV2DeviceGetActiveMemorySize (devID);				break;
 		case kDeviceGetDACVersion:						outVal = ::NTV2DeviceGetDACVersion (devID);						break;
 		case kDeviceGetDownConverterDelay:				outVal = ::NTV2DeviceGetDownConverterDelay (devID);				break;
+		case kDeviceGetGenlockVersion:					outVal = ULWord(::NTV2DeviceGetGenlockVersion (devID));			break;
 		case kDeviceGetHDMIVersion:						outVal = ::NTV2DeviceGetHDMIVersion (devID);					break;
 		case kDeviceGetLUTVersion:						outVal = ::NTV2DeviceGetLUTVersion (devID);						break;
-		case kDeviceGetSPIFlashVersion:					outVal = ::NTV2DeviceGetSPIFlashVersion (devID);				break;
 		case kDeviceGetMaxAudioChannels:				outVal = ::NTV2DeviceGetMaxAudioChannels (devID);				break;
 		case kDeviceGetMaxRegisterNumber:				outVal = ::NTV2DeviceGetMaxRegisterNumber (devID);				break;
 		case kDeviceGetMaxTransferCount:				outVal = ::NTV2DeviceGetMaxTransferCount (devID);				break;
-		case kDeviceGetNumDMAEngines:					outVal = ::NTV2DeviceGetNumDMAEngines (devID);					break;
-		case kDeviceGetNumVideoChannels:				outVal = ::NTV2DeviceGetNumVideoChannels (devID);				break;
-		case kDeviceGetPingLED:							outVal = ::NTV2DeviceGetPingLED (devID);						break;
-		case kDeviceGetUFCVersion:						outVal = ::NTV2DeviceGetUFCVersion (devID);						break;
+		case kDeviceGetNum2022ChannelsSFP1:				outVal = ::NTV2DeviceGetNum2022ChannelsSFP1 (devID);			break;
+		case kDeviceGetNum2022ChannelsSFP2:				outVal = ::NTV2DeviceGetNum2022ChannelsSFP2 (devID);			break;
 		case kDeviceGetNum4kQuarterSizeConverters:		outVal = ::NTV2DeviceGetNum4kQuarterSizeConverters (devID);		break;
 		case kDeviceGetNumAESAudioInputChannels:		outVal = ::NTV2DeviceGetNumAESAudioInputChannels (devID);		break;
 		case kDeviceGetNumAESAudioOutputChannels:		outVal = ::NTV2DeviceGetNumAESAudioOutputChannels (devID);		break;
@@ -1788,8 +1837,11 @@ bool CNTV2DriverInterface::GetNumericParam (const ULWord inParamID, ULWord & out
 		case kDeviceGetNumAnalogVideoInputs:			outVal = ::NTV2DeviceGetNumAnalogVideoInputs (devID);			break;
 		case kDeviceGetNumAnalogVideoOutputs:			outVal = ::NTV2DeviceGetNumAnalogVideoOutputs (devID);			break;
 		case kDeviceGetNumAudioSystems:					outVal = ::NTV2DeviceGetNumAudioSystems (devID);				break;
+		case kDeviceGetNumBufferedAudioSystems:			outVal = ::NTV2DeviceGetNumAudioSystems(devID)
+																	+ (IsSupported(kDeviceCanDoAudioMixer) ? 1 : 0);	break;
 		case kDeviceGetNumCrossConverters:				outVal = ::NTV2DeviceGetNumCrossConverters (devID);				break;
 		case kDeviceGetNumCSCs:							outVal = ::NTV2DeviceGetNumCSCs (devID);						break;
+		case kDeviceGetNumDMAEngines:					outVal = ::NTV2DeviceGetNumDMAEngines (devID);					break;
 		case kDeviceGetNumDownConverters:				outVal = ::NTV2DeviceGetNumDownConverters (devID);				break;
 		case kDeviceGetNumEmbeddedAudioInputChannels:	outVal = ::NTV2DeviceGetNumEmbeddedAudioInputChannels (devID);	break;
 		case kDeviceGetNumEmbeddedAudioOutputChannels:	outVal = ::NTV2DeviceGetNumEmbeddedAudioOutputChannels (devID);	break;
@@ -1800,30 +1852,30 @@ bool CNTV2DriverInterface::GetNumericParam (const ULWord inParamID, ULWord & out
 		case kDeviceGetNumHDMIVideoInputs:				outVal = ::NTV2DeviceGetNumHDMIVideoInputs (devID);				break;
 		case kDeviceGetNumHDMIVideoOutputs:				outVal = ::NTV2DeviceGetNumHDMIVideoOutputs (devID);			break;
 		case kDeviceGetNumInputConverters:				outVal = ::NTV2DeviceGetNumInputConverters (devID);				break;
+		case kDeviceGetNumLTCInputs:					outVal = ::NTV2DeviceGetNumLTCInputs (devID);					break;
+		case kDeviceGetNumLTCOutputs:					outVal = ::NTV2DeviceGetNumLTCOutputs (devID);					break;
 		case kDeviceGetNumLUTs:							outVal = ::NTV2DeviceGetNumLUTs (devID);						break;
 		case kDeviceGetNumMixers:						outVal = ::NTV2DeviceGetNumMixers (devID);						break;
 		case kDeviceGetNumOutputConverters:				outVal = ::NTV2DeviceGetNumOutputConverters (devID);			break;
 		case kDeviceGetNumReferenceVideoInputs:			outVal = ::NTV2DeviceGetNumReferenceVideoInputs (devID);		break;
 		case kDeviceGetNumSerialPorts:					outVal = ::NTV2DeviceGetNumSerialPorts (devID);					break;
+		case kDeviceGetNumTSIMuxers:					{	static const NTV2WidgetID s425MuxerIDs[] = {NTV2_Wgt425Mux1, NTV2_Wgt425Mux2,
+																										NTV2_Wgt425Mux3, NTV2_Wgt425Mux4};
+															const ULWordSet wgtIDs(GetSupportedItems(kNTV2EnumsID_WidgetID));
+															for (size_t ndx(0);  ndx < sizeof(s425MuxerIDs)/sizeof(NTV2WidgetID);  ndx++)
+																if (wgtIDs.find(s425MuxerIDs[ndx]) != wgtIDs.end())
+																	outVal++;
+															break;
+														}
 		case kDeviceGetNumUpConverters:					outVal = ::NTV2DeviceGetNumUpConverters (devID);				break;
+		case kDeviceGetNumVideoChannels:				outVal = ::NTV2DeviceGetNumVideoChannels (devID);				break;
 		case kDeviceGetNumVideoInputs:					outVal = ::NTV2DeviceGetNumVideoInputs (devID);					break;
 		case kDeviceGetNumVideoOutputs:					outVal = ::NTV2DeviceGetNumVideoOutputs (devID);				break;
-		case kDeviceGetNum2022ChannelsSFP1:				outVal = ::NTV2DeviceGetNum2022ChannelsSFP1 (devID);			break;
-		case kDeviceGetNum2022ChannelsSFP2:				outVal = ::NTV2DeviceGetNum2022ChannelsSFP2 (devID);			break;
-		case kDeviceGetNumLTCInputs:					outVal = ::NTV2DeviceGetNumLTCInputs (devID);					break;
-		case kDeviceGetNumLTCOutputs:					outVal = ::NTV2DeviceGetNumLTCOutputs (devID);					break;
+		case kDeviceGetPingLED:							outVal = ::NTV2DeviceGetPingLED (devID);						break;
+		case kDeviceGetSPIFlashVersion:					outVal = ::NTV2DeviceGetSPIFlashVersion (devID);				break;
 		case kDeviceGetTotalNumAudioSystems:			outVal = ::NTV2DeviceGetNumAudioSystems(devID)
 																	+ (IsSupported(kDeviceCanDoAudioMixer) ? 2 : 0);	break;
-		case kDeviceGetNumBufferedAudioSystems:			outVal = ::NTV2DeviceGetNumAudioSystems(devID)
-																	+ (IsSupported(kDeviceCanDoAudioMixer) ? 1 : 0);	break;
-		case kDeviceGetNumTSIMuxers:
-		{	static const NTV2WidgetID s425MuxerIDs[] = {NTV2_Wgt425Mux1, NTV2_Wgt425Mux2, NTV2_Wgt425Mux3, NTV2_Wgt425Mux4};
-			const ULWordSet wgtIDs(GetSupportedItems(kNTV2EnumsID_WidgetID));
-			for (size_t ndx(0);  ndx < sizeof(s425MuxerIDs)/sizeof(NTV2WidgetID);  ndx++)
-				if (wgtIDs.find(s425MuxerIDs[ndx]) != wgtIDs.end())
-					outVal++;
-			break;
-		}
+		case kDeviceGetUFCVersion:						outVal = ::NTV2DeviceGetUFCVersion (devID);						break;
 		default:	return false;	//	Bad param
 	}
 	return true;	//	Successfully used old ::NTV2DeviceGetNum function
@@ -1831,19 +1883,24 @@ bool CNTV2DriverInterface::GetNumericParam (const ULWord inParamID, ULWord & out
 }	//	GetNumericParam
 
 
-bool CNTV2DriverInterface::GetRegInfoForBoolParam (const NTV2BoolParamID inParamID, NTV2RegInfo & outRegInfo)
+bool CNTV2DriverInterface::GetRegInfoForBoolParam (const NTV2BoolParamID inParamID, NTV2RegInfo & outRegInfo, bool & outFlipSense)
 {
 	outRegInfo.MakeInvalid();
+	outFlipSense = false;
 	switch (inParamID)
 	{
 		case kDeviceCanDoAudioMixer:			outRegInfo.Set(kRegGlobalControl2, 0, kRegMaskAudioMixerPresent, kRegShiftAudioMixerPresent);		break;
 		case kDeviceHasMultiRasterWidget:		outRegInfo.Set(kRegMRSupport, 0, kRegMaskMRSupport, kRegShiftMRSupport);							break;
 		case kDeviceHasMicrophoneInput:			outRegInfo.Set(kRegGlobalControl2, 0, kRegMaskIsDNXIV, kRegShiftIsDNXIV);							break;
-		case kDeviceHasBreakoutBoard:			outRegInfo.Set(kRegBOBStatus, 0, kRegMaskBOBAbsent, kRegShiftBOBAbsent);							break;
 		case kDeviceAudioCanWaitForVBI:			outRegInfo.Set(kRegCanDoStatus, 0, kRegMaskCanDoAudioWaitForVBI, kRegShiftCanDoAudioWaitForVBI);	break;
 		case kDeviceHasXptConnectROM:			outRegInfo.Set(kRegCanDoStatus, 0, kRegMaskCanDoValidXptROM, kRegShiftCanDoValidXptROM);			break;
+
 //	BIT(2) IN kRegCanDoStatus NOT YET IN ALL KONA5, CORVID44/12G, KONAX FIRMWARE:
 //		case kDeviceCanDoCustomHancInsertion:	outRegInfo.Set(kRegCanDoStatus, 0, kRegMaskCanDoHancInsertion, kRegShiftCanDoHancInsertion);		break;
+
+		//	kDeviceHasBreakoutBoard's sense is opposite of "BOBAbsent", so set outFlipSense 'true':
+		case kDeviceHasBreakoutBoard:			outRegInfo.Set(kRegBOBStatus, 0, kRegMaskBOBAbsent, kRegShiftBOBAbsent);	outFlipSense = true;	break;
+
 		default:	break;
 	}
 	return outRegInfo.IsValid();

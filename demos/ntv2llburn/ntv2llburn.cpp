@@ -55,7 +55,7 @@ NTV2LLBurn::~NTV2LLBurn ()
 
 	if (!mConfig.fDoMultiFormat)
 	{
-		mDevice.SetEveryFrameServices (mSavedTaskMode);										//	Restore prior service level
+		mDevice.SetTaskMode (mSavedTaskMode);										//	Restore prior service level
 		mDevice.ReleaseStreamForApplication (kAppSignature, static_cast<int32_t>(AJAProcess::GetPid()));	//	Release the device
 	}
 
@@ -96,7 +96,7 @@ AJAStatus NTV2LLBurn::Init (void)
 
 	ULWord	appSignature	(0);
 	int32_t	appPID			(0);
-	mDevice.GetEveryFrameServices (mSavedTaskMode);				//	Save the current device state
+	mDevice.GetTaskMode (mSavedTaskMode);		//	Save the current device state
 	mDevice.GetStreamingApplication (appSignature, appPID);		//	Who currently "owns" the device?
 	if (!mConfig.fDoMultiFormat)
 	{
@@ -105,11 +105,9 @@ AJAStatus NTV2LLBurn::Init (void)
 			cerr << "## ERROR:  Unable to acquire device because another app (pid " << appPID << ") owns it" << endl;
 			return AJA_STATUS_BUSY;		//	Some other app is using the device
 		}
-		mDevice.SetEveryFrameServices (NTV2_OEM_TASKS);			//	Set the OEM service level
-		mDevice.ClearRouting ();								//	Clear the current device routing (since I "own" the device)
+		mDevice.ClearRouting ();	//	Clear the current device routing (since I "own" the device)
 	}
-	else
-		mDevice.SetEveryFrameServices (NTV2_OEM_TASKS);			//	Force OEM tasks
+	mDevice.SetTaskMode (NTV2_OEM_TASKS);	//	Set the OEM service level
 
 	//	Configure the SDI relays if present
 	if (mDevice.features().HasSDIRelays())
@@ -206,12 +204,10 @@ AJAStatus NTV2LLBurn::SetupVideo (void)
 	// Check to see if desired input/output channels are in use by Auto-Circulate, i.e. another Auto-Circulate-based ntv2 demo is running.
 	AUTOCIRCULATE_STATUS acStatus;
 	if (!mDevice.AutoCirculateInitForInput( mConfig.fInputChannel,
-										    kNumFrameBuffers,
+										    NTV2ACFrameRange(kNumFrameBuffers),
 											NTV2_AUDIOSYSTEM_INVALID,
 											AUTOCIRCULATE_WITH_RP188
-												| (mDevice.features().CanDoCustomAnc() ? AUTOCIRCULATE_WITH_ANC : 0),
-											1,	//	numChannels to gang
-											0, 0))
+												| (mDevice.features().CanDoCustomAnc() ? AUTOCIRCULATE_WITH_ANC : 0)))
 	{
 		cerr << "Failed to init " << NTV2ChannelToString(mConfig.fInputChannel) << " for input. Is channel in-use by Auto-Circulate?" << endl;
 		return AJA_STATUS_FAIL;
@@ -225,12 +221,9 @@ AJAStatus NTV2LLBurn::SetupVideo (void)
 	mInputEndFrame = acStatus.acEndFrame;
 
 	if (!mDevice.AutoCirculateInitForOutput( mConfig.fOutputChannel,
-											 kNumFrameBuffers,
+											 NTV2ACFrameRange(kNumFrameBuffers),
 											 NTV2_AUDIOSYSTEM_INVALID,
-											 AUTOCIRCULATE_WITH_RP188
-												| (mDevice.features().CanDoCustomAnc() ? AUTOCIRCULATE_WITH_ANC : 0),
-											 1,	//	numChannels to gang
-											 0, 0))
+											 AUTOCIRCULATE_WITH_RP188  | (mDevice.features().CanDoCustomAnc() ? AUTOCIRCULATE_WITH_ANC : 0)))
 	{
 		cerr << "Failed to init " << NTV2ChannelToString(mConfig.fOutputChannel) << " for output. Is channel in-use by Auto-Circulate?" << endl;
 		return AJA_STATUS_FAIL;
@@ -401,6 +394,11 @@ AJAStatus NTV2LLBurn::SetupAudio (void)
 
 }	//	SetupAudio
 
+// Fixes internal issue #921
+// NTV2 device audio systems wrap after reading/writing 65,280 samples of 16-channel audio (or 130,560 samples of 8-channel audio)...
+// i.e. after reading/writing 4,177,920 bytes max.
+// A 4MB buffer (4,194,304 bytes) wastes 16K (16,384 bytes), but is page-sized, and readily page-aligned on most host OSes.
+#define HOST_AUDIO_BUFFER_SIZE 4194304
 
 AJAStatus NTV2LLBurn::SetupHostBuffers (void)
 {
@@ -409,7 +407,7 @@ AJAStatus NTV2LLBurn::SetupHostBuffers (void)
 	//	Allocate and add each in-host buffer to my member variables.
 	//	DMA performance can be accelerated slightly by using page-aligned video buffers...
 	mpHostVideoBuffer.Allocate(mFormatDesc.GetVideoWriteSize(ULWord(NTV2Buffer::DefaultPageSize())), true);
-	mpHostAudioBuffer.Allocate(NTV2_AUDIOSIZE_MAX, /*page-aligned*/true);
+	mpHostAudioBuffer.Allocate(HOST_AUDIO_BUFFER_SIZE, /*page-aligned*/true);
 	mpHostF1AncBuffer.Allocate(mConfig.WithAnc() ? NTV2_ANCSIZE_MAX : 0, /*pageAligned*/true);
 	mpHostF2AncBuffer = NTV2Buffer(mConfig.WithAnc() ? NTV2_ANCSIZE_MAX : 0);
 
@@ -427,7 +425,7 @@ AJAStatus NTV2LLBurn::SetupHostBuffers (void)
 void NTV2LLBurn::RouteInputSignal (void)
 {
 	const NTV2OutputCrosspointID	inputOutputXpt	(::GetInputSourceOutputXpt (mConfig.fInputSource));
-	const NTV2InputCrosspointID		fbInputXpt		(::GetFrameBufferInputXptFromChannel (mConfig.fInputChannel));
+	const NTV2InputCrosspointID		fbInputXpt		(::GetFrameStoreInputXptFromChannel (mConfig.fInputChannel));
 
 	if (::IsRGBFormat (mConfig.fPixelFormat))
 	{
@@ -449,7 +447,7 @@ void NTV2LLBurn::RouteInputSignal (void)
 void NTV2LLBurn::RouteOutputSignal (void)
 {
 	const NTV2InputCrosspointID		outputInputXpt	(::GetOutputDestInputXpt (mOutputDest));
-	const NTV2OutputCrosspointID	fbOutputXpt		(::GetFrameBufferOutputXptFromChannel (mConfig.fOutputChannel, ::IsRGBFormat (mConfig.fPixelFormat)));
+	const NTV2OutputCrosspointID	fbOutputXpt		(::GetFrameStoreOutputXptFromChannel (mConfig.fOutputChannel, ::IsRGBFormat (mConfig.fPixelFormat)));
 	NTV2OutputCrosspointID			outputXpt		(fbOutputXpt);
 
 	mRP188Outputs.clear();

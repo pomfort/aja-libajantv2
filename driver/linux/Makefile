@@ -25,10 +25,10 @@ VERSIONING 	 = -DSDKVER_MAJ=$(SDKVER_MAJ) -DSDKVER_MIN=$(SDKVER_MIN) -DSDKVER_PN
 DISTRO_INFO  = -DDISTRO_TYPE=$(DISTRO_TYPE) -DDISTRO_IS_RHEL_LIKE=$(DISTRO_IS_RHEL_LIKE) \
 			   -DDISTRO_MAJ_VERSION=$(DISTRO_MAJ_VERSION) -DDISTRO_MIN_VERSION=$(DISTRO_MIN_VERSION)  \
 			   -DDISTRO_KERNEL_PKG_MAJ=$(DISTRO_KERNEL_PKG_MAJ) -DDISTRO_KERNEL_PKG_MIN=$(DISTRO_KERNEL_PKG_MIN) -DDISTRO_KERNEL_PKG_PNT=$(DISTRO_KERNEL_PKG_PNT)
-EXTRA_CFLAGS += -DAJALinux -DXENA2 $(DBG) -D$(NTV2TARGET) -D$(A_ARCH) $(EXTRA_DEPS) $(VERSIONING) $(DISTRO_INFO) $(INCLUDES) -Wall -Wno-implicit-fallthrough
+ccflags-y += -DAJALinux -DXENA2 $(DBG) -D$(NTV2TARGET) -D$(A_ARCH) $(EXTRA_DEPS) $(VERSIONING) $(DISTRO_INFO) $(INCLUDES) -Wall -Wno-implicit-fallthrough
 
 ifdef AJA_HEVC
-	EXTRA_CFLAGS += -DAJA_HEVC=$(AJA_HEVC)
+	ccflags-y += -DAJA_HEVC=$(AJA_HEVC)
 endif
 
 # if rdma is set
@@ -59,21 +59,21 @@ ifeq ($(NVIDIA_SRC_DIR),)
 endif
 
 # find the nvidia.ko file
+#ifeq ($(NVIDIA_KO),)
+#	NVIDIA_KO := $(shell find /lib/modules/$(KVERSION)/ -name 'nvidia-p2p.ko'|grep -P 'nvidia-p2p(_[0-9]+)?.ko'|head -1)
+#endif
 ifeq ($(NVIDIA_KO),)
 	NVIDIA_KO := $(shell find /lib/modules/$(KVERSION)/ -name 'nvidia.ko'|grep -P 'nvidia(_[0-9]+)?.ko'|head -1)
 endif	
 ifeq ($(NVIDIA_KO),)
 	NVIDIA_KO := $(shell find /lib/modules/$(KVERSION)/ -name 'nvidia.ko.xz'|grep -P 'nvidia(_[0-9]+)?.ko'|head -1)
 endif
-ifeq  ($(shell objdump -t $(NVIDIA_KO) | grep nvidia_p2p_get_pages),)
-	NVIDIA_KO :=
-endif
 ifeq ($(NVIDIA_KO),)
-	NVIDIA_KO := $(shell find /lib/modules/$(KVERSION)/ -name 'nvidia-p2p.ko'|grep -P 'nvidia-p2p(_[0-9]+)?.ko'|head -1)
+	NVIDIA_KO := $(shell find /lib/modules/$(KVERSION)/ -name 'nvidia.ko.zst'|grep -P 'nvidia(_[0-9]+)?.ko'|head -1)
 endif
 
 ifdef NVIDIA_IGPU
-	EXTRA_CFLAGS += -DAJA_IGPU=1
+	ccflags-y += -DAJA_IGPU=1
 ifneq ($(NVIDIA_KO),)
 ifeq ($(NVIDIA_SYMVERS),)
 	NVIDIA_GEN_SYMVERS := ./nvidia-ko-to-module-symvers $(NVIDIA_KO) $(A_LINUX_DRIVER_PATH)/nvidia.symvers
@@ -91,22 +91,23 @@ endif
 
 # determine if the ko is gpl - no ko is proprietary igpu
 ifeq ($(NVIDIA_KO),)
-	EXTRA_CFLAGS += -I$(NVIDIA_SRC_DIR) -DAJA_RDMA=1 -DNVIDIA_PROPRIETARY=1
+	ccflags-y += -I$(NVIDIA_SRC_DIR) -DAJA_RDMA=1 -DNVIDIA_PROPRIETARY=1
 else
 ifeq ($(shell modinfo $(NVIDIA_KO) | grep license: | grep GPL),)
-	EXTRA_CFLAGS += -I$(NVIDIA_SRC_DIR) -DAJA_RDMA=1 -DNVIDIA_PROPRIETARY=1
+	ccflags-y += -I$(NVIDIA_SRC_DIR) -DAJA_RDMA=1 -DNVIDIA_PROPRIETARY=1
 else
-	EXTRA_CFLAGS += -I$(NVIDIA_SRC_DIR) -DAJA_RDMA=1
+	ccflags-y += -I$(NVIDIA_SRC_DIR) -DAJA_RDMA=1
 endif
 endif
 
 ifdef AJA_CREATE_DEVICE_NODES
-	EXTRA_CFLAGS += -DAJA_CREATE_DEVICE_NODES=$(AJA_CREATE_DEVICE_NODES)
+	ccflags-y += -DAJA_CREATE_DEVICE_NODES=$(AJA_CREATE_DEVICE_NODES)
 endif
 
 AJANTV2INCS = $(A_LIB_NTV2_INC)/ajaexport.h \
 			$(A_LIB_NTV2_INC)/ajatypes.h \
 			$(A_LIB_NTV2_INC)/ntv2audiodefines.h \
+			$(A_LIB_NTV2_INC)/ntv2deprecate.h \
 			$(A_LIB_NTV2_INC)/ntv2devicefeatures.h \
 			$(A_LIB_NTV2_INC)/ntv2devicefeatures.hh \
 			$(A_LIB_NTV2_INC)/ntv2driverprocamp.h \
@@ -148,6 +149,7 @@ DRIVERINCS = ../ntv2anc.h \
 			../ntv2hout4reg.h \
 			../ntv2infoframe.h \
 			../ntv2kona.h \
+			../ntv2mailbox.h \
 			../ntv2mcap.h \
 			../ntv2pciconfig.h \
 			../ntv2rp188.h \
@@ -173,6 +175,7 @@ DRIVERSRCS = ../ntv2anc.c \
 			../ntv2hdmiout4.c \
 			../ntv2infoframe.c \
 			../ntv2kona.c \
+			../ntv2mailbox.c \
 			../ntv2mcap.c \
 			../ntv2pciconfig.c \
 			../ntv2rp188.c \

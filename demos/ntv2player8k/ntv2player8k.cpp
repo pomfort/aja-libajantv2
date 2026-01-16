@@ -93,7 +93,7 @@ void NTV2Player8K::Quit (void)
 	{
 		mDevice.ReleaseStreamForApplication (kDemoAppSignature, int32_t(AJAProcess::GetPid()));
 		if (NTV2_IS_VALID_TASK_MODE(mSavedTaskMode))
-			mDevice.SetEveryFrameServices(mSavedTaskMode);		//	Restore prior task mode
+			mDevice.SetTaskMode(mSavedTaskMode);	//	Restore prior task mode
 	}
 }	//	Quit
 
@@ -133,11 +133,11 @@ AJAStatus NTV2Player8K::Init (void)
 
 	if (!mConfig.fDoMultiFormat)
 	{
-		mDevice.GetEveryFrameServices(mSavedTaskMode);		//	Save the current task mode
+		mDevice.GetTaskMode(mSavedTaskMode);	//	Save the current task mode
 		if (!mDevice.AcquireStreamForApplication (kDemoAppSignature, int32_t(AJAProcess::GetPid())))
-			return AJA_STATUS_BUSY;		//	Device is in use by another app -- fail
+			return AJA_STATUS_BUSY;	//	Device is in use by another app -- fail
 	}
-	mDevice.SetEveryFrameServices(NTV2_OEM_TASKS);			//	Set OEM service level
+	mDevice.SetTaskMode(NTV2_OEM_TASKS);	//	Set OEM service level
 
 	if (mDevice.features().CanDoMultiFormat())
 		mDevice.SetMultiFormatMode(mConfig.fDoMultiFormat);
@@ -254,11 +254,10 @@ AJAStatus NTV2Player8K::SetUpVideo (void)
 AJAStatus NTV2Player8K::SetUpAudio (void)
 {
 	uint16_t numAudioChannels (mDevice.features().GetMaxAudioChannels());
-
-	//	If there are 8192 pixels on a line instead of 7680, reduce the number of audio channels
-	//	This is because HANC is narrower, and has space for only 8 channels
-	if (NTV2_IS_UHD2_FULL_VIDEO_FORMAT(mConfig.fVideoFormat)  &&  numAudioChannels > 8)
-		numAudioChannels = 8;
+	if (numAudioChannels > 8)											//	If audio system handles more than 8 channels...
+		if (!mDevice.features().CanDo2110())							//	...and SDI (i.e. not ST 2110 IP streaming)...
+			if (NTV2_IS_UHD2_FULL_VIDEO_FORMAT(mConfig.fVideoFormat))	//	...and 8K (narrower HANC only fits 8 audio channels)
+				numAudioChannels = 8;	//	...then reduce to 8 audio channels
 
 	//	Use the NTV2AudioSystem that has the same ordinal value as the output FrameStore/Channel...
 	mAudioSystem = ::NTV2ChannelToAudioSystem(mConfig.fOutputChannel);

@@ -12,7 +12,7 @@
 #include "ntv2utils.h"
 #include <sstream>
 #include "ajabase/common/common.h"
-//#include "ajabase/system/info.h"	//	for AJASystemInfo
+#include "ajabase/system/info.h"	//	for AJASystemInfo
 
 using namespace std;
 
@@ -33,6 +33,7 @@ CNTV2Card::CNTV2Card (const UWord inDeviceIndex, const string & inHostName)
 	bool openOK = hostName.empty()	?  CNTV2DriverInterface::Open(inDeviceIndex) :	CNTV2DriverInterface::Open(hostName);
 	if (openOK)
 	{
+#if !defined(NTV2_DEPRECATE_17_2)
 		if (IsBufferSizeSetBySW())
 		{
 			NTV2Framesize fbSize;
@@ -50,6 +51,7 @@ CNTV2Card::CNTV2Card (const UWord inDeviceIndex, const string & inHostName)
 			_ulFrameBufferSize = ::NTV2DeviceGetFrameBufferSize (GetDeviceID (), fg, format);
 			_ulNumFrameBuffers = ::NTV2DeviceGetNumberFrameBuffers (GetDeviceID (), fg, format);
 		}
+#endif//!defined(NTV2_DEPRECATE_17_2)
 	}
 }
 
@@ -88,24 +90,18 @@ string CNTV2Card::GetDisplayName (void)
 	ostringstream oss;
 	if (IsRemote())
 	{
-		auto params = CNTV2DriverInterface::ConnectParams();
-		if (params.hasKey("displayname"))
-		{
-			oss << params.valueForKey("displayname");
-		}
-		else if (params.hasKey(kNTV2PluginRegInfoKey_LongName))
-		{
-			oss << params.valueForKey(kNTV2PluginRegInfoKey_LongName);
-		}
-		else if (params.hasKey(kNTV2PluginRegInfoKey_ShortName))
-		{
-			oss << params.valueForKey(kNTV2PluginRegInfoKey_ShortName);
-		}
+		const NTV2Dictionary params (ConnectParams());
+		string fName (params.valueForKey(kQParamVDevName)),
+				devNdx (params.valueForKey(kQParamVDevIndex)),
+				model (GetModelName());
+		if (model == "Software" || model == "AJA Device" || model == "(Not Found)" || model == "Unknown" || model == "???")
+			model = fName.empty() ? params.valueForKey(kNTV2PluginRegInfoKey_ShortName) : fName;
+		if (devNdx.empty())
+			{ostringstream tmp;  tmp << GetIndexNumber();  devNdx = tmp.str();}
+		oss << model << " - " << devNdx;
 	}
 	else
-	{
 		oss << GetModelName() << " - " << GetIndexNumber();
-	}
 	return oss.str();
 }
 
@@ -150,8 +146,8 @@ string CNTV2Card::GetDescription (void) const
 	CNTV2Card * pCard = (CNTV2Card*)(this);	//	Ugly: *sigh* If only most CNTV2Card member functions were 'const'
 	ostringstream oss;
 	string hostName("localhost"), snStr;
-//	AJASystemInfo sysInfo (AJA_SystemInfoMemoryUnit_Megabytes, AJA_SystemInfoSection_System);
-//	sysInfo.GetValue(AJA_SystemInfoTag_System_Name, hostName);
+	AJASystemInfo sysInfo (AJA_SystemInfoMemoryUnit_Megabytes, AJA_SystemInfoSection_System);
+	sysInfo.GetValue(AJA_SystemInfoTag_System_Name, hostName);
 	oss << pCard->GetModelName();
 	if (!pCard->GetSerialNumberString(snStr))
 		snStr.clear();
@@ -428,7 +424,7 @@ NTV2BreakoutType CNTV2Card::GetBreakoutHardware (void)
 				break;
 			case DEVICE_ID_KONAX:
 				// Do we have a BOB?
-				if(IsBreakoutBoardConnected())
+				if (IsSupported(kDeviceHasBreakoutBoard))
 					result = NTV2_BreakoutBoard;
 				break;
 			default:
@@ -490,7 +486,7 @@ bool CNTV2Card::GetLPTunnelConfigurationURLString (string & outURLString)
 	return true;
 }
 
-int CNTV2Card::GetSFPURLs(std::vector<std::string> & OutSFPURLStrings)
+int CNTV2Card::GetSFPConfigurationURLStrings(std::vector<std::string> & OutSFPURLStrings)
 {
 	if (!NTV2DeviceHasLPProductCode(GetDeviceID()) || NTV2DeviceGetNum25GSFPs(GetDeviceID()) == 0)
 		return 0;
@@ -518,7 +514,7 @@ int CNTV2Card::GetSFPURLs(std::vector<std::string> & OutSFPURLStrings)
 		
 		OutSFPURLStrings.push_back(tempString.str());
 	}
-	return OutSFPURLStrings.size();
+	return int(OutSFPURLStrings.size());
 }
 
 #if !defined(NTV2_DEPRECATE_16_3)

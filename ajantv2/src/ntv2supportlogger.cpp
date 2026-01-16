@@ -501,7 +501,7 @@ void CNTV2SupportLogger::FetchInfoLog (ostringstream & oss) const
 			hasIP = mDevice.GetLPExternalConfigurationURLString(urlString);
 			AJASystemInfo::append(infoTable, "External URL", hasIP ? urlString : "No URL");
 			std::vector<std::string> sfpURLStings;
-			int numSFPs = mDevice.GetSFPURLs(sfpURLStings);
+			int numSFPs = mDevice.GetSFPConfigurationURLStrings(sfpURLStings);
 			for (int i = 0; i < numSFPs; i++)
 			{
 				AJASystemInfo::append(infoTable, "SFP URL", sfpURLStings[i]);
@@ -655,13 +655,13 @@ void CNTV2SupportLogger::FetchAutoCirculateLog (ostringstream & oss) const
 	int32_t					appPID			(0);
 	ChannelToACStatus		perChannelStatus;	//	Per-channel AUTOCIRCULATE_STATUS
 	ChannelToPerFrameTCList perChannelTCs;		//	Per-channel collection of per-frame TCs
-	NTV2EveryFrameTaskMode	taskMode	(NTV2_DISABLE_TASKS);
+	NTV2TaskMode			taskMode	(NTV2_DISABLE_TASKS);
 	const NTV2DeviceID		deviceID	(mDevice.GetDeviceID());
 	const ULWord			numChannels (::NTV2DeviceGetNumVideoChannels(deviceID));
 	static const string		dashes		(25, '-');
 
 	//	This code block takes a snapshot of the current AutoCirculate state of the device...
-	mDevice.GetEveryFrameServices(taskMode);
+	mDevice.GetTaskMode(taskMode);
 	mDevice.GetStreamingApplication(appSignature, appPID);
 
 	//	Grab A/C status for each channel...
@@ -897,6 +897,7 @@ void CNTV2SupportLogger::FetchRoutingLog (ostringstream & oss) const
 	mDevice.GetRouting (router);
 	oss << "(NTV2InputCrosspointID <== NTV2OutputCrosspointID)" << endl;
 	router.Print (oss, false);
+	oss << endl;
 /**
 	//	Dump routing registers...
 	NTV2RegNumSet		deviceRoutingRegs;
@@ -1097,7 +1098,7 @@ bool CNTV2SupportLogger::LoadFromLog (const string & inLogFilePath, const bool b
 	return true;
 }
 
-string CNTV2SupportLogger::InventLogFilePathAndName (CNTV2Card & inDevice, const string inPrefix, const string inExtension)
+string CNTV2SupportLogger::InventLogFilePathAndName (CNTV2Card & inDevice, const string inPrefix, const string inExtension)	//	STATIC
 {
 	string homePath;
 	AJASystemInfo info;
@@ -1112,7 +1113,7 @@ string CNTV2SupportLogger::InventLogFilePathAndName (CNTV2Card & inDevice, const
 	return oss.str();
 }
 
-bool CNTV2SupportLogger::DumpDeviceSDRAM (CNTV2Card & inDevice, const string & inFilePath, ostream & msgStrm)
+bool CNTV2SupportLogger::DumpDeviceSDRAM (CNTV2Card & inDevice, const string & inFilePath, ostream & msgStrm)	//	STATIC
 {
 	if (!inDevice.IsOpen())
 		return false;

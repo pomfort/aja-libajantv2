@@ -85,6 +85,7 @@
 #include "ntv2stream.h"
 #include "../ntv2video.h"
 #include "../ntv2pciconfig.h"
+#include "../ntv2mailbox.h"
 
 #if  !defined(x86_64) && !defined(aarch64)
 #error "*** AJA driver must be built 64 bit ***"
@@ -217,6 +218,7 @@ static int DoMessageBufferLock(ULWord deviceNumber, PDMA_PAGE_ROOT pRoot, NTV2Bu
 static int DoMessageBitstream(ULWord deviceNumber, NTV2Bitstream* pBitstream);
 static int DoMessageStreamChannel(ULWord deviceNumber, PFILE_DATA pFile, NTV2StreamChannel* pStreamChannel);
 static int DoMessageStreamBuffer(ULWord deviceNumber, PFILE_DATA pFile, NTV2StreamBuffer* pStreamBuffer);
+static int DoMessageMailBuffer(ULWord deviceNumber, PFILE_DATA pFile, NTV2MailBuffer* pMailBuffer);
 
 /* PCI Device Module functions */
 static int probe(struct pci_dev *pdev, const struct pci_device_id *id);	/* New device inserted */
@@ -433,8 +435,20 @@ static struct pci_device_id pci_device_id_tab[] =
 	   0, 0,											// Class, class_mask
 	   0												// Opaque data
 	},
-	{  // KonaX
+	{  // KonaIP 25g
         NTV2_VENDOR_ID, NTV2_DEVICE_ID_KONAIP_25G,		// Vendor and device IDs
+	   PCI_ANY_ID, PCI_ANY_ID,							// Subvendor, Subdevice IDs
+	   0, 0,											// Class, class_mask
+	   0												// Opaque data
+	},
+	{  // CORVID88 Gen3
+	   NTV2_VENDOR_ID, NTV2_DEVICE_ID_CORVID88_GEN3,	// Vendor and device IDs
+	   PCI_ANY_ID, PCI_ANY_ID,							// Subvendor, Subdevice IDs
+	   0, 0,											// Class, class_mask
+	   0												// Opaque data
+	},
+	{  // CORVID44 Gen3
+	   NTV2_VENDOR_ID, NTV2_DEVICE_ID_CORVID44_GEN3,	// Vendor and device IDs
 	   PCI_ANY_ID, PCI_ANY_ID,							// Subvendor, Subdevice IDs
 	   0, 0,											// Class, class_mask
 	   0												// Opaque data
@@ -1525,8 +1539,8 @@ int ntv2_ioctl(struct inode *inode, struct file *file, unsigned int cmd, unsigne
 			NTV2_HEADER *	pMessage	= NULL;
 			void *			pInBuff		= NULL;
 			void *			pOutBuff	= NULL;
-			void *			pOutBuff2	= NULL;
 			int				returnCode	= 0;
+            void *          pVirtBuf[3] = { NULL, NULL, NULL };
 
 			// This limits the message size to one page, which should not be a problem, nor is sleeping on the alloc
 			pMessage = (NTV2_HEADER *) get_zeroed_page(GFP_KERNEL);
@@ -1571,13 +1585,6 @@ int ntv2_ioctl(struct inode *inode, struct file *file, unsigned int cmd, unsigne
 			// Scratch areas for returned data
 			pOutBuff = (void *) get_zeroed_page(GFP_KERNEL);
 			if (!pOutBuff)
-			{
-				returnCode = -ENOMEM;
-				goto messageError;
-			}
-
-			pOutBuff2 = (void *) get_zeroed_page(GFP_KERNEL);
-			if (!pOutBuff2)
 			{
 				returnCode = -ENOMEM;
 				goto messageError;
@@ -1643,22 +1650,47 @@ int ntv2_ioctl(struct inode *inode, struct file *file, unsigned int cmd, unsigne
 					NTV2Buffer *	pInRegisters		= &((NTV2GetRegisters*)pMessage)->mInRegisters;
 					NTV2Buffer *	pOutGoodRegisters	= &((NTV2GetRegisters*)pMessage)->mOutGoodRegisters;
 					NTV2Buffer *	pOutValues			= &((NTV2GetRegisters*)pMessage)->mOutValues;
-					ULWord *		pInRegArray			= (ULWord*) pInBuff;
-					ULWord *		pOutRegArray		= (ULWord*) pOutBuff;
-					ULWord *		pOutValuesArray		= (ULWord*) pOutBuff2;
+					ULWord *		pInRegArray			= NULL;
+					ULWord *		pOutRegArray		= NULL;
+					ULWord *		pOutValuesArray		= NULL;
 					ULWord			i;
 
 					//	Check for buffer overrun
-					if((pInRegisters->fByteCount > PAGE_SIZE) ||
-					   (pOutGoodRegisters->fByteCount > PAGE_SIZE) ||
-					   (pOutValues->fByteCount > PAGE_SIZE))
+					if((pInRegisters->fByteCount > (PAGE_SIZE * 1000)) ||
+					   (pOutGoodRegisters->fByteCount > (PAGE_SIZE * 1000)) ||
+					   (pOutValues->fByteCount > (PAGE_SIZE * 1000)))
 					{
 						returnCode = -ENOMEM;
 						goto messageError;
 					}
 
+                    //  Allocate register buffers
+                    pVirtBuf[0] = vmalloc(pInRegisters->fByteCount);
+                    if (pVirtBuf[0] == NULL)
+					{
+						returnCode = -ENOMEM;
+						goto messageError;
+					}
+                    pInRegArray = (ULWord*)pVirtBuf[0];
+                    
+                    pVirtBuf[1] = vmalloc(pOutGoodRegisters->fByteCount);
+                    if (pVirtBuf[1] == NULL)
+					{
+						returnCode = -ENOMEM;
+						goto messageError;
+					}
+                    pOutRegArray = (ULWord*)pVirtBuf[1];
+                    
+                    pVirtBuf[2] = vmalloc(pOutValues->fByteCount);
+                    if (pVirtBuf[2] == NULL)
+					{
+						returnCode = -ENOMEM;
+						goto messageError;
+					}
+                    pOutValuesArray = (ULWord*)pVirtBuf[2];
+
 					//	List of registers to read
-					if(copy_from_user((void*) pInBuff,
+					if(copy_from_user((void*) pInRegArray,
 									  (const void*)(pInRegisters->fUserSpacePtr),
 									  pInRegisters->fByteCount))
 					{
@@ -1667,7 +1699,7 @@ int ntv2_ioctl(struct inode *inode, struct file *file, unsigned int cmd, unsigne
 					}
 
 					//	List of registers read to return
-					if(copy_from_user((void*) pOutBuff,
+					if(copy_from_user((void*) pOutRegArray,
 									  (const void*)(pOutGoodRegisters->fUserSpacePtr),
 									  pOutGoodRegisters->fByteCount))
 					{
@@ -1676,7 +1708,7 @@ int ntv2_ioctl(struct inode *inode, struct file *file, unsigned int cmd, unsigne
 					}
 
 					//	List of register values to return
-					if(copy_from_user((void*) pOutBuff2,
+					if(copy_from_user((void*) pOutValuesArray,
 									  (const void*)(pOutValues->fUserSpacePtr),
 									  pOutValues->fByteCount))
 					{
@@ -1694,14 +1726,14 @@ int ntv2_ioctl(struct inode *inode, struct file *file, unsigned int cmd, unsigne
 					}
 
 					//	Send back the list of registers read
-					if(copy_to_user((void*)(pOutGoodRegisters->fUserSpacePtr), (const void*)pOutBuff, pOutGoodRegisters->fByteCount))
+					if(copy_to_user((void*)(pOutGoodRegisters->fUserSpacePtr), (const void*)pOutRegArray, pOutGoodRegisters->fByteCount))
 					{
 						returnCode = -EFAULT;
 						goto messageError;
 					}
 
 					//	Send back the list of values read
-					if(copy_to_user((void*)(pOutValues->fUserSpacePtr), (const void*)pOutBuff2, pOutValues->fByteCount))
+					if(copy_to_user((void*)(pOutValues->fUserSpacePtr), (const void*)pOutValuesArray, pOutValues->fByteCount))
 					{
 						returnCode = -EFAULT;
 						goto messageError;
@@ -1902,6 +1934,21 @@ int ntv2_ioctl(struct inode *inode, struct file *file, unsigned int cmd, unsigne
 				}
 				break;
 
+            case NTV2_TYPE_AJAMAILBUFFER:
+				{
+					returnCode = DoMessageMailBuffer (deviceNumber, pFileData, (NTV2MailBuffer*)pMessage);
+					if (returnCode)
+					{
+						goto messageError;
+					}
+					if(copy_to_user((void*)arg, (const void*)pMessage, sizeof(NTV2MailBuffer)))
+					{
+						returnCode = -EFAULT;
+						goto messageError;
+					}
+				}
+				break;
+
 			case NTV2_TYPE_VIRTUAL_DATA_RW:
 				{
                     NTV2VirtualData *msg = (NTV2VirtualData *)pMessage;
@@ -1969,11 +2016,18 @@ int ntv2_ioctl(struct inode *inode, struct file *file, unsigned int cmd, unsigne
 
 messageError:
 
-			free_page((unsigned long) pOutBuff2);
-			free_page((unsigned long) pOutBuff);
-			free_page((unsigned long) pInBuff);
-			free_page((unsigned long) pMessage);
-
+            {
+                int i;
+                for (i = 0; i < 3; i++)
+                {
+                    if (pVirtBuf[i] != NULL)
+                        vfree(pVirtBuf[i]);
+                }
+                free_page((unsigned long) pOutBuff);
+                free_page((unsigned long) pInBuff);
+                free_page((unsigned long) pMessage);
+            }
+            
 			return returnCode;
 		}
 		break;
@@ -2143,7 +2197,6 @@ int ntv2_mmap(struct file *file,struct vm_area_struct* vma)
 // Initialize lookup table that translates from an INTERRUPT_ENUM to
 // a single-bit mask in either the Audio/Video Interrupt Control register
 // (register 20) or the DMA Interrupt Control register (register 49).
-// Entries in the table for enums with no associated bit are set to all ones.
 void InitInterruptBitLUT(void)
 {
 	ULWord * intrBitLut = getNTV2ModuleParams()->intrBitLut;
@@ -2292,15 +2345,11 @@ ntv2_fpga_irq(int irq,void *dev_id,struct pt_regs *regs)
 	ULWord DMAStatusRegister = 0;
     ULWord NWLStatusRegister = 0;
 	ULWord XlnxStatusRegister = 0;
-	ULWord status2Register;
-                                       // see XenaHardwareIF.pdf for details
+    ULWord statusRegister = 0;
+	ULWord status2Register = 0;
+    ULWord messageStatusRegister = 0;
+    ULWord64 audioClock = 0;
 	int handled = 0;
-
-	// TODO: Now that HDNTV card, which doesn't do DMA, is no longer supported,
-	// this function can be compacted.
-
-    ULWord          statusRegister;
-    ULWord64        audioClock;
 	
 	Ntv2SystemContext systemContext;
 	systemContext.devNum = deviceNumber;
@@ -2321,27 +2370,120 @@ ntv2_fpga_irq(int irq,void *dev_id,struct pt_regs *regs)
 		break;
 	}
 
-	if( NTV2DeviceGetNumVideoChannels(pNTV2Params->_DeviceID) > 2)
+    // read video status registers
+    statusRegister = ReadStatusRegister(deviceNumber);
+	if (NTV2DeviceGetNumVideoChannels(pNTV2Params->_DeviceID) > 2)
 	{
 		status2Register = ReadRegister(deviceNumber, kRegStatus2, NO_MASK, NO_SHIFT);
 	}
-	else
-	{
-		status2Register = 0;
-	}
 
-	{
-		statusRegister = ReadStatusRegister(deviceNumber);
+    // read message signal status register
+	messageStatusRegister = ReadMessageInterruptStatus(deviceNumber);
 
+    // clear interrupt bits
+    if ( statusRegister & BIT_15 )
+    {
+        ClearUartRxInterrupt(deviceNumber);
+    }
+    if ( statusRegister & BIT_24 )
+    {
+        ClearUartTxInterrupt(deviceNumber);
+    }
+    if ( statusRegister & BIT_26 )
+    {
+        ClearUartTxInterrupt2(deviceNumber);
+    }
+    if ( statusRegister & kIntInput1VBLActive )
+    {
+        ClearInput1VerticalInterrupt(deviceNumber);
+    }
+    if ( statusRegister & kIntInput2VBLActive )
+    {
+        ClearInput2VerticalInterrupt(deviceNumber);
+    }
+    if ( status2Register & kIntInput3VBLActive )
+    {
+        ClearInput3VerticalInterrupt(deviceNumber);
+    }
+    if ( status2Register & kIntInput4VBLActive )
+    {
+        ClearInput4VerticalInterrupt(deviceNumber);
+    }
+    if ( status2Register & kIntInput5VBLActive )
+    {
+        ClearInput5VerticalInterrupt(deviceNumber);
+    }
+    if ( status2Register & kIntInput6VBLActive )
+    {
+        ClearInput6VerticalInterrupt(deviceNumber);
+    }
+    if ( status2Register & kIntInput7VBLActive )
+    {
+        ClearInput7VerticalInterrupt(deviceNumber);
+    }
+    if ( status2Register & kIntInput8VBLActive )
+    {
+        ClearInput8VerticalInterrupt(deviceNumber);
+    }
+    if ( statusRegister & kIntOutput1VBLActive )
+    {
+        ClearOutputVerticalInterrupt(deviceNumber);
+    }
+    if ( statusRegister & kIntOutput2VBLActive )
+    {
+        ClearOutput2VerticalInterrupt(deviceNumber);
+    }
+    if ( statusRegister & kIntOutput3VBLActive )
+    {
+        ClearOutput3VerticalInterrupt(deviceNumber);
+    }
+    if ( statusRegister & kIntOutput4VBLActive )
+    {
+        ClearOutput4VerticalInterrupt(deviceNumber);
+    }
+    if ( status2Register & kIntOutput5VBLActive )
+    {
+        ClearOutput5VerticalInterrupt(deviceNumber);
+    }
+    if ( status2Register & kIntOutput6VBLActive )
+    {
+        ClearOutput6VerticalInterrupt(deviceNumber);
+    }
+    if ( status2Register & kIntOutput7VBLActive )
+    {
+        ClearOutput7VerticalInterrupt(deviceNumber);
+    }
+    if ( status2Register & kIntOutput8VBLActive )
+    {
+        ClearOutput8VerticalInterrupt(deviceNumber);
+    }
+    if ( messageStatusRegister & kRegMaskMessageInterruptStatusChannel1 )
+    {
+        ClearMessageChannel1Interrupt(deviceNumber);
+    }
+    if ( messageStatusRegister & kRegMaskMessageInterruptStatusChannel2 )
+    {
+        ClearMessageChannel2Interrupt(deviceNumber);
+    }
+    if ( messageStatusRegister & kRegMaskMessageInterruptStatusChannel3 )
+    {
+        ClearMessageChannel3Interrupt(deviceNumber);
+    }
+    if ( messageStatusRegister & kRegMaskMessageInterruptStatusChannel4 )
+    {
+        ClearMessageChannel4Interrupt(deviceNumber);
+    }
+
+    // get the audio time
+    audioClock = GetAudioClock(deviceNumber);;
+
+    {
 		// check serial port interrupt
 		ntv2_serial_interrupt(pNTV2Params->m_pSerialPort);
-
-		statusRegister = ReadStatusRegister(deviceNumber);
 
 		// UART Rx
 		if ( statusRegister & BIT_15 )
 		{
-			ClearUartRxInterrupt(deviceNumber);
 			interruptHousekeeping(pNTV2Params, eUartRx);
 # ifdef UARTRXFIFOSIZE
 			{
@@ -2391,7 +2533,6 @@ ntv2_fpga_irq(int irq,void *dev_id,struct pt_regs *regs)
 		// UART Tx
 		if ( statusRegister & BIT_24 )
 		{
-			ClearUartTxInterrupt(deviceNumber);
 			interruptHousekeeping(pNTV2Params, eUartTx);
 # ifdef UARTTXFIFOSIZE
 			{
@@ -2422,7 +2563,6 @@ ntv2_fpga_irq(int irq,void *dev_id,struct pt_regs *regs)
 		// UART Tx2
 		if ( statusRegister & BIT_26 )
 		{
-			ClearUartTxInterrupt2(deviceNumber);
 			interruptHousekeeping(pNTV2Params, eUartTx2);
 # ifdef UARTTXFIFOSIZE
 			{
@@ -2453,36 +2593,28 @@ ntv2_fpga_irq(int irq,void *dev_id,struct pt_regs *regs)
 	}
 
 	{
-		ULWord statusRegister = ReadStatusRegister(deviceNumber);
 		bool autoCirculateLocked = false;
 		unsigned long flags = 0;
 
-		ULWord messageStatusRegister = ReadMessageInterruptStatus(deviceNumber);
-
-		// P2P autocirculate messages
+		// process P2P autocirculate interrupt
 		if ( messageStatusRegister & kRegMaskMessageInterruptStatusChannel1 )
 		{
-			ClearMessageChannel1Interrupt(deviceNumber);
 			OemAutoCirculateMessage(deviceNumber, NTV2CROSSPOINT_CHANNEL1, ReadMessageChannel1(deviceNumber));
 		}
 		if ( messageStatusRegister & kRegMaskMessageInterruptStatusChannel2 )
 		{
-			ClearMessageChannel2Interrupt(deviceNumber);
 			OemAutoCirculateMessage(deviceNumber, NTV2CROSSPOINT_CHANNEL2, ReadMessageChannel2(deviceNumber));
 		}
 		if ( messageStatusRegister & kRegMaskMessageInterruptStatusChannel3 )
 		{
-			ClearMessageChannel3Interrupt(deviceNumber);
 			OemAutoCirculateMessage(deviceNumber, NTV2CROSSPOINT_CHANNEL3, ReadMessageChannel3(deviceNumber));
 		}
 		if ( messageStatusRegister & kRegMaskMessageInterruptStatusChannel4 )
 		{
-			ClearMessageChannel4Interrupt(deviceNumber);
 			OemAutoCirculateMessage(deviceNumber, NTV2CROSSPOINT_CHANNEL4, ReadMessageChannel4(deviceNumber));
 		}
 
-		// Test for each interrupt and send a wakeup for each one that's active
-
+		// process av interrupts
 		if ( statusRegister & kIntAuxVerticalActive )
 		{
 			interruptHousekeeping(pNTV2Params,eAuxVerticalInterrupt);
@@ -2504,10 +2636,7 @@ ntv2_fpga_irq(int irq,void *dev_id,struct pt_regs *regs)
 
         if ( statusRegister & kIntInput1VBLActive )
         {
-            ClearInput1VerticalInterrupt(deviceNumber);
-
             // save the interrupt time
-            audioClock = GetAudioClock(deviceNumber);
             WriteRegister(deviceNumber, kVRegTimeStampLastInput1VerticalLo, audioClock & 0xFFFF, NO_MASK, NO_SHIFT);
             WriteRegister(deviceNumber, kVRegTimeStampLastInput1VerticalHi, audioClock >> 32, NO_MASK, NO_SHIFT);
 
@@ -2522,10 +2651,7 @@ ntv2_fpga_irq(int irq,void *dev_id,struct pt_regs *regs)
 
 		if ( statusRegister & kIntInput2VBLActive )
 		{
-			ClearInput2VerticalInterrupt(deviceNumber);
-
 			// save the interrupt time
-            audioClock = GetAudioClock(deviceNumber);
             WriteRegister(deviceNumber, kVRegTimeStampLastInput2VerticalLo, audioClock & 0xFFFF, NO_MASK, NO_SHIFT);
             WriteRegister(deviceNumber, kVRegTimeStampLastInput2VerticalHi, audioClock >> 32, NO_MASK, NO_SHIFT);
 
@@ -2540,10 +2666,7 @@ ntv2_fpga_irq(int irq,void *dev_id,struct pt_regs *regs)
 
 		if ( status2Register & kIntInput3VBLActive )
 		{
-			ClearInput3VerticalInterrupt(deviceNumber);
-
             // save the interrupt time
-            audioClock = GetAudioClock(deviceNumber);
             WriteRegister(deviceNumber, kVRegTimeStampLastInput3VerticalLo, audioClock & 0xFFFF, NO_MASK, NO_SHIFT);
             WriteRegister(deviceNumber, kVRegTimeStampLastInput3VerticalHi, audioClock >> 32, NO_MASK, NO_SHIFT);
 
@@ -2557,10 +2680,7 @@ ntv2_fpga_irq(int irq,void *dev_id,struct pt_regs *regs)
 		}
 		if ( status2Register & kIntInput4VBLActive )
 		{
-			ClearInput4VerticalInterrupt(deviceNumber);
-
             // save the interrupt time
-            audioClock = GetAudioClock(deviceNumber);
             WriteRegister(deviceNumber, kVRegTimeStampLastInput4VerticalLo, audioClock & 0xFFFF, NO_MASK, NO_SHIFT);
             WriteRegister(deviceNumber, kVRegTimeStampLastInput4VerticalHi, audioClock >> 32, NO_MASK, NO_SHIFT);
 
@@ -2574,10 +2694,7 @@ ntv2_fpga_irq(int irq,void *dev_id,struct pt_regs *regs)
 		}
 		if ( status2Register & kIntInput5VBLActive )
 		{
-			ClearInput5VerticalInterrupt(deviceNumber);
-
             // save the interrupt time
-            audioClock = GetAudioClock(deviceNumber);
             WriteRegister(deviceNumber, kVRegTimeStampLastInput5VerticalLo, audioClock & 0xFFFF, NO_MASK, NO_SHIFT);
             WriteRegister(deviceNumber, kVRegTimeStampLastInput5VerticalHi, audioClock >> 32, NO_MASK, NO_SHIFT);
 
@@ -2591,10 +2708,7 @@ ntv2_fpga_irq(int irq,void *dev_id,struct pt_regs *regs)
 		}
 		if ( status2Register & kIntInput6VBLActive )
 		{
-			ClearInput6VerticalInterrupt(deviceNumber);
-
             // save the interrupt time
-            audioClock = GetAudioClock(deviceNumber);
             WriteRegister(deviceNumber, kVRegTimeStampLastInput6VerticalLo, audioClock & 0xFFFF, NO_MASK, NO_SHIFT);
             WriteRegister(deviceNumber, kVRegTimeStampLastInput6VerticalHi, audioClock >> 32, NO_MASK, NO_SHIFT);
 
@@ -2608,10 +2722,7 @@ ntv2_fpga_irq(int irq,void *dev_id,struct pt_regs *regs)
 		}
 		if ( status2Register & kIntInput7VBLActive )
 		{
-			ClearInput7VerticalInterrupt(deviceNumber);
-
             // save the interrupt time
-            audioClock = GetAudioClock(deviceNumber);
             WriteRegister(deviceNumber, kVRegTimeStampLastInput7VerticalLo, audioClock & 0xFFFF, NO_MASK, NO_SHIFT);
             WriteRegister(deviceNumber, kVRegTimeStampLastInput7VerticalHi, audioClock >> 32, NO_MASK, NO_SHIFT);
 
@@ -2625,10 +2736,7 @@ ntv2_fpga_irq(int irq,void *dev_id,struct pt_regs *regs)
 		}
 		if ( status2Register & kIntInput8VBLActive )
 		{
-			ClearInput8VerticalInterrupt(deviceNumber);
-
             // save the interrupt time
-            audioClock = GetAudioClock(deviceNumber);
             WriteRegister(deviceNumber, kVRegTimeStampLastInput8VerticalLo, audioClock & 0xFFFF, NO_MASK, NO_SHIFT);
             WriteRegister(deviceNumber, kVRegTimeStampLastInput8VerticalHi, audioClock >> 32, NO_MASK, NO_SHIFT);
 
@@ -2642,10 +2750,7 @@ ntv2_fpga_irq(int irq,void *dev_id,struct pt_regs *regs)
 		}
 		if ( statusRegister & kIntOutput1VBLActive )
 		{
-			ClearOutputVerticalInterrupt(deviceNumber);
-
             // save the interrupt time
-            audioClock = GetAudioClock(deviceNumber);
             WriteRegister(deviceNumber, kVRegTimeStampLastOutputVerticalLo, audioClock & 0xFFFF, NO_MASK, NO_SHIFT);
             WriteRegister(deviceNumber, kVRegTimeStampLastOutputVerticalHi, audioClock >> 32, NO_MASK, NO_SHIFT);
 
@@ -2671,10 +2776,7 @@ ntv2_fpga_irq(int irq,void *dev_id,struct pt_regs *regs)
 
 		if ( statusRegister & kIntOutput2VBLActive )
 		{
-			ClearOutput2VerticalInterrupt(deviceNumber);
-
             // save the interrupt time
-            audioClock = GetAudioClock(deviceNumber);
             WriteRegister(deviceNumber, kVRegTimeStampLastOutput2VerticalLo, audioClock & 0xFFFF, NO_MASK, NO_SHIFT);
             WriteRegister(deviceNumber, kVRegTimeStampLastOutput2VerticalHi, audioClock >> 32, NO_MASK, NO_SHIFT);
 
@@ -2688,10 +2790,7 @@ ntv2_fpga_irq(int irq,void *dev_id,struct pt_regs *regs)
 		}
 		if ( statusRegister & kIntOutput3VBLActive )
 		{
-			ClearOutput3VerticalInterrupt(deviceNumber);
-
             // save the interrupt time
-            audioClock = GetAudioClock(deviceNumber);
             WriteRegister(deviceNumber, kVRegTimeStampLastOutput3VerticalLo, audioClock & 0xFFFF, NO_MASK, NO_SHIFT);
             WriteRegister(deviceNumber, kVRegTimeStampLastOutput3VerticalHi, audioClock >> 32, NO_MASK, NO_SHIFT);
 
@@ -2705,10 +2804,7 @@ ntv2_fpga_irq(int irq,void *dev_id,struct pt_regs *regs)
 		}
 		if ( statusRegister & kIntOutput4VBLActive )
 		{
-			ClearOutput4VerticalInterrupt(deviceNumber);
-
             // save the interrupt time
-            audioClock = GetAudioClock(deviceNumber);
             WriteRegister(deviceNumber, kVRegTimeStampLastOutput4VerticalLo, audioClock & 0xFFFF, NO_MASK, NO_SHIFT);
             WriteRegister(deviceNumber, kVRegTimeStampLastOutput4VerticalHi, audioClock >> 32, NO_MASK, NO_SHIFT);
 
@@ -2722,10 +2818,7 @@ ntv2_fpga_irq(int irq,void *dev_id,struct pt_regs *regs)
 		}
 		if ( status2Register & kIntOutput5VBLActive )
 		{
-			ClearOutput5VerticalInterrupt(deviceNumber);
-
             // save the interrupt time
-            audioClock = GetAudioClock(deviceNumber);
             WriteRegister(deviceNumber, kVRegTimeStampLastOutput5VerticalLo, audioClock & 0xFFFF, NO_MASK, NO_SHIFT);
             WriteRegister(deviceNumber, kVRegTimeStampLastOutput5VerticalHi, audioClock >> 32, NO_MASK, NO_SHIFT);
 
@@ -2739,10 +2832,7 @@ ntv2_fpga_irq(int irq,void *dev_id,struct pt_regs *regs)
 		}
 		if ( status2Register & kIntOutput6VBLActive )
 		{
-			ClearOutput6VerticalInterrupt(deviceNumber);
-
             // save the interrupt time
-            audioClock = GetAudioClock(deviceNumber);
             WriteRegister(deviceNumber, kVRegTimeStampLastOutput6VerticalLo, audioClock & 0xFFFF, NO_MASK, NO_SHIFT);
             WriteRegister(deviceNumber, kVRegTimeStampLastOutput6VerticalHi, audioClock >> 32, NO_MASK, NO_SHIFT);
 
@@ -2756,10 +2846,7 @@ ntv2_fpga_irq(int irq,void *dev_id,struct pt_regs *regs)
 		}
 		if ( status2Register & kIntOutput7VBLActive )
 		{
-			ClearOutput7VerticalInterrupt(deviceNumber);
-
             // save the interrupt time
-            audioClock = GetAudioClock(deviceNumber);
             WriteRegister(deviceNumber, kVRegTimeStampLastOutput7VerticalLo, audioClock & 0xFFFF, NO_MASK, NO_SHIFT);
             WriteRegister(deviceNumber, kVRegTimeStampLastOutput7VerticalHi, audioClock >> 32, NO_MASK, NO_SHIFT);
 
@@ -2773,10 +2860,7 @@ ntv2_fpga_irq(int irq,void *dev_id,struct pt_regs *regs)
 		}
 		if ( status2Register & kIntOutput8VBLActive )
 		{
-			ClearOutput8VerticalInterrupt(deviceNumber);
-
             // save the interrupt time
-            audioClock = GetAudioClock(deviceNumber);
             WriteRegister(deviceNumber, kVRegTimeStampLastOutput8VerticalLo, audioClock & 0xFFFF, NO_MASK, NO_SHIFT);
             WriteRegister(deviceNumber, kVRegTimeStampLastOutput8VerticalHi, audioClock >> 32, NO_MASK, NO_SHIFT);
 
@@ -3107,6 +3191,7 @@ static int __init aja_ntv2_module_init(void)
 	ntv2_driver.remove = remove;
     ntv2_driver.suspend = suspend;
     ntv2_driver.resume = resume;
+    ntv2_driver.shutdown = remove;
 
 	/* register uart driver */
 	MSG("%s: register uart driver %s\n",
@@ -3729,6 +3814,16 @@ static int probe(struct pci_dev *pdev, const struct pci_device_id *id)	/* New de
                     ntv2pp->m_pRasterMonitor = NULL;
                 }
             }
+            ntv2pp->m_pMailbox[0] = ntv2_mailbox_open(&ntv2pp->systemContext, "ntv2mailbox", 0);
+            if (ntv2pp->m_pMailbox[0] != NULL)
+            {
+                status = ntv2_mailbox_configure(ntv2pp->m_pMailbox[0], 0x100000);
+                if (status != NTV2_STATUS_SUCCESS)
+                {
+                    ntv2_mailbox_close(ntv2pp->m_pMailbox[0]);
+                    ntv2pp->m_pMailbox[0] = NULL;
+                }
+            }
         }
 	
         ntv2pp->m_pSetupMonitor = ntv2_setup_open(&ntv2pp->systemContext, "ntv2setup");
@@ -3762,6 +3857,14 @@ static int probe(struct pci_dev *pdev, const struct pci_device_id *id)	/* New de
         if (ntv2pp->m_pRasterMonitor != NULL)
         {
             ntv2_videoraster_enable(ntv2pp->m_pRasterMonitor);
+        }
+
+        for (i = 0; i < NTV2_MAX_MAILBOX; i++)
+        {
+            if (ntv2pp->m_pMailbox[i] != NULL)
+            {
+                ntv2_mailbox_enable(ntv2pp->m_pMailbox[i]);
+            }
         }
     
         // configure tty uart
@@ -4009,6 +4112,23 @@ static void remove(struct pci_dev *pdev)
     {
         ntv2_videoraster_close(ntv2pp->m_pRasterMonitor);
         ntv2pp->m_pRasterMonitor = NULL;
+    }
+
+    for (i = 0; i < NTV2_MAX_MAILBOX; i++)
+    {
+        if (ntv2pp->m_pMailbox[i] != NULL)
+        {
+            ntv2_mailbox_disable(ntv2pp->m_pMailbox[i]);
+        }
+    }
+    
+    for (i = 0; i < NTV2_MAX_MAILBOX; i++)
+    {
+        if (ntv2pp->m_pMailbox[i] != NULL)
+        {
+            ntv2_mailbox_close(ntv2pp->m_pMailbox[i]);
+            ntv2pp->m_pMailbox[i] = NULL;
+        }
     }
 
 	// close the serial port
@@ -4490,10 +4610,10 @@ int ValidateAjaNTV2Message(NTV2_HEADER * pHeaderIn)
 #endif
 		return -EINVAL;
 	}
-	if (pHeaderIn->fOperation || pHeaderIn->fResultStatus)
+	if (pHeaderIn->fResultStatus)
 	{
 #ifdef LOG_VALIDATE_ERRORS
-		MSG("fOperation or fResultStatus non-zero\n");
+		MSG("fResultStatus non-zero\n");
 #endif
 		return -EINVAL;
 	}
@@ -4862,6 +4982,119 @@ int DoMessageStreamBuffer(ULWord deviceNumber, PFILE_DATA pFile, NTV2StreamBuffe
 	{
         ntv2_stream_buffer_status(pStr, pBuffer);
 	}
+
+	return 0;
+}
+
+int DoMessageMailBuffer(ULWord deviceNumber, PFILE_DATA pFile, NTV2MailBuffer* pBuffer)
+{
+	Ntv2Status status = NTV2_STATUS_FAIL;
+	NTV2PrivateParams * pNTV2Params = getNTV2Params(deviceNumber);
+    int chn = 0;
+    struct ntv2_mailbox* pMail = NULL;
+    uint32_t offset = 0;
+    int ret = 0;
+    
+	if (pBuffer == NULL)
+		return -EINVAL;
+
+    chn = (int)pBuffer->mChannel;
+    if (chn >= NTV2_MAX_MAILBOX)
+    {
+        pBuffer->mStatus = NTV2_MAIL_BUFFER_FAIL;
+        return -EINVAL;
+    }
+
+    pMail = pNTV2Params->m_pMailbox[chn];
+    if (pMail == NULL)
+    {
+        pBuffer->mStatus = NTV2_MAIL_BUFFER_FAIL;
+        return -EINVAL;
+    }
+
+	if ((pBuffer->mFlags & NTV2_MAIL_BUFFER_SEND) != 0)
+	{
+        if (pBuffer->mBuffer.fByteCount > NTV2_MAIL_BUFFER_MAX)
+        {
+			// MSG("%s: DoMessageMailBuffer: Send buffer too large (%u > %u)\n",
+			// 	pMail->name, pBuffer->mBuffer.fByteCount, NTV2_MAIL_BUFFER_MAX);
+            pBuffer->mStatus = NTV2_MAIL_BUFFER_FAIL;
+            return -EINVAL;
+        }
+        
+		// copy data buffer from user
+		ret = copy_from_user(pMail->send_data,
+							 (void*)pBuffer->mBuffer.fUserSpacePtr,
+							 pBuffer->mDataSize);
+		if (ret < 0)
+		{
+			return ret;
+		}
+
+        status = ntv2_packet_send(pMail,
+								  pMail->send_data,
+								  pBuffer->mDataSize,
+								  &offset,
+								  pBuffer->mDelay,
+								  pBuffer->mTimeout);
+		if (status == NTV2_STATUS_SUCCESS)
+		{
+			pBuffer->mStatus = NTV2_MAIL_BUFFER_SUCCESS;
+		}
+		else
+		{
+			if (status == NTV2_STATUS_TIMEOUT)
+			{
+				pBuffer->mStatus = NTV2_MAIL_BUFFER_TIMEOUT;
+			}
+			else
+			{
+				pBuffer->mStatus = NTV2_MAIL_BUFFER_FAIL;
+			}
+		}
+    }
+	if ((pBuffer->mFlags & NTV2_MAIL_BUFFER_RECEIVE) != 0)
+	{
+        if (pBuffer->mBuffer.fByteCount > NTV2_MAIL_BUFFER_MAX)
+        {
+			// MSG("%s: DoMessageMailBuffer: Receive buffer too large (%u > %u)\n",
+			// 	pMail->name, pBuffer->mBuffer.fByteCount, NTV2_MAIL_BUFFER_MAX);
+            pBuffer->mStatus = NTV2_MAIL_BUFFER_FAIL;
+            return -EINVAL;
+        }
+
+        status = ntv2_packet_recv(pMail,
+								  pMail->recv_data,
+								  pBuffer->mBuffer.fByteCount,
+								  &offset,
+								  pBuffer->mDelay,
+								  pBuffer->mTimeout);
+        if (status == NTV2_STATUS_SUCCESS)
+        {
+			pBuffer->mStatus = NTV2_MAIL_BUFFER_SUCCESS;
+            pBuffer->mDataSize = offset;
+            ret = copy_to_user((void*)pBuffer->mBuffer.fUserSpacePtr,
+                               pMail->recv_data,
+                               pBuffer->mDataSize);
+            if (ret < 0)
+            {
+                return ret;
+            }
+        }
+        else
+        {
+			if (status == NTV2_STATUS_TIMEOUT)
+			{
+				pBuffer->mStatus = NTV2_MAIL_BUFFER_TIMEOUT;
+				return 0;
+			}
+			else
+			{
+				pBuffer->mStatus = NTV2_MAIL_BUFFER_FAIL;
+			}
+            return -EPERM;
+        }
+    }
 
 	return 0;
 }
@@ -5506,6 +5739,14 @@ static int suspend(struct pci_dev *pdev, pm_message_t state)
 		ntv2_genlock2_disable(ntv2pp->m_pGenlock2Monitor);
 	}
 
+    for (j = 0; j < NTV2_MAX_MAILBOX; j++)
+    {
+        if (ntv2pp->m_pMailbox[j] != NULL)
+        {
+            ntv2_mailbox_disable(ntv2pp->m_pMailbox[j]);
+        }
+    }
+
 	// disable the serial driver
 	if (ntv2pp->m_pSerialPort)
 	{
@@ -5638,6 +5879,14 @@ static int resume(struct pci_dev *pdev)
             ntv2_genlock2_enable(ntv2pp->m_pGenlock2Monitor);
         }
 
+        for (i = 0; i < NTV2_MAX_MAILBOX; i++)
+        {
+            if (ntv2pp->m_pMailbox[i] != NULL)
+            {
+                ntv2_mailbox_enable(ntv2pp->m_pMailbox[i]);
+            }
+        }
+        
         // Enable interrupts
         EnableAllInterrupts(deviceNumber);
 

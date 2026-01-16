@@ -20,8 +20,8 @@ if(NOT AJA_DISABLE_QT)
     add_subdirectory(ntv2qtpreview)
     add_subdirectory(ntv2streampreview)
     add_subdirectory(ntv2qtmultiinput)
-    add_subdirectory(ntv2konaipj2ksetup)
-    add_subdirectory(ntv2konaipjsonsetup)
+#   add_subdirectory(ntv2konaipj2ksetup) # removed in SDK 17.6
+#   add_subdirectory(ntv2konaipjsonsetup) # removed in SDK 17.6
 endif()
 
 add_subdirectory(ntv2llburn)
@@ -32,6 +32,9 @@ add_subdirectory(ntv2player4k)
 add_subdirectory(ntv2player8k)
 add_subdirectory(ntv2streamplayer)
 add_subdirectory(ntv2switchbitfile)
+if (NOT CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    add_subdirectory(ntv2vcam)
+endif()
 
 if(NOT AJANTV2_BUILD_OPENSOURCE)
     add_subdirectory(ntv2ccgrabber)  

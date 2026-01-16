@@ -174,16 +174,16 @@ static const ULWord gChannelToSDIInputProgressiveShift []	= { kRegShiftInput1Pro
 
 
 // Method: SetEveryFrameServices
-// Input:  NTV2EveryFrameTaskMode
+// Input:  NTV2TaskMode
 // Output: NONE
-bool CNTV2Card::SetEveryFrameServices (NTV2EveryFrameTaskMode mode)
+bool CNTV2Card::SetTaskMode (const NTV2TaskMode inMode)
 {
-	return WriteRegister(kVRegEveryFrameTaskFilter, ULWord(mode));
+	return NTV2_IS_VALID_TASK_MODE(inMode) && WriteRegister(kVRegEveryFrameTaskFilter, ULWord(inMode));
 }
 
-bool CNTV2Card::GetEveryFrameServices (NTV2EveryFrameTaskMode & outMode)
+bool CNTV2Card::GetTaskMode (NTV2TaskMode & outMode)
 {
-	return CNTV2DriverInterface::ReadRegister(kVRegEveryFrameTaskFilter, outMode);
+	return driverInterface().ReadRegister(kVRegEveryFrameTaskFilter, outMode);
 }
 
 #if !defined(NTV2_DEPRECATE_16_3)
@@ -205,8 +205,8 @@ bool CNTV2Card::SetVideoFormat (const NTV2VideoFormat value, const bool inIsReta
 {	AJA_UNUSED(keepVancSettings)
 	bool ajaRetail(inIsRetail);
 #ifdef	MSWindows
-	NTV2EveryFrameTaskMode mode;
-	GetEveryFrameServices(mode);
+	NTV2TaskMode mode;
+	GetTaskMode(mode);
 	if(mode == NTV2_STANDARD_TASKS)
 		ajaRetail = true;
 #endif
@@ -897,8 +897,8 @@ bool CNTV2Card::IsSDStandard (bool & outIsStandardDef, NTV2Channel inChannel)
 bool CNTV2Card::SetFrameGeometry (NTV2FrameGeometry value, bool ajaRetail, NTV2Channel channel)
 {
 #ifdef	MSWindows
-	NTV2EveryFrameTaskMode mode;
-	GetEveryFrameServices(mode);
+	NTV2TaskMode mode;
+	GetTaskMode(mode);
 	if(mode == NTV2_STANDARD_TASKS)
 		ajaRetail = true;
 #else
@@ -945,7 +945,7 @@ bool CNTV2Card::SetFrameGeometry (NTV2FrameGeometry value, bool ajaRetail, NTV2C
 	bool changeBufferSize = IsSupported(kDeviceCanChangeFrameBufferSize) && (oldFrameBufferSize != newFrameBufferSize);
 
 	status = WriteRegister (regNum, newFrameStoreGeometry, kRegMaskGeometry, kRegShiftGeometry);
-
+#if !defined(NTV2_DEPRECATE_17_2)
 	// If software set the frame buffer size, read the values from hardware
 	if ( GetFBSizeAndCountFromHW(_ulFrameBufferSize, _ulNumFrameBuffers) )
 	{
@@ -960,7 +960,7 @@ bool CNTV2Card::SetFrameGeometry (NTV2FrameGeometry value, bool ajaRetail, NTV2C
 		_ulFrameBufferSize = newFrameBufferSize;
 		_ulNumFrameBuffers = ::NTV2DeviceGetNumberFrameBuffers(_boardID, newGeometry, format);
 	}
-		
+#endif//!defined(NTV2_DEPRECATE_17_2)
 	return status;
 }
 
@@ -1525,7 +1525,7 @@ bool CNTV2Card::GetReference (NTV2ReferenceSource & outValue)
 	ULWord	refControl2(0), ptpControl(0);
 	bool result (CNTV2DriverInterface::ReadRegister (kRegGlobalControl, outValue, kRegMaskRefSource, kRegShiftRefSource));
 
-	if (GetNumSupported(kDeviceGetNumVideoChannels) > 4 || IsIPDevice())
+    if ((GetNumSupported(kDeviceGetNumVideoChannels) > 4 || IsIPDevice()) && !NTV2DeviceCanDo25GIP(_boardID) )
 	{
 		ReadRegister (kRegGlobalControl2,  refControl2,	 kRegMaskRefSource2,  kRegShiftRefSource2);
 		if (refControl2)
@@ -1549,6 +1549,24 @@ bool CNTV2Card::GetReference (NTV2ReferenceSource & outValue)
 				default:	break;
 			}
 	}
+
+    if (NTV2DeviceCanDo25GIP(_boardID))
+    {
+        result = ReadRegister(kRegLPPTPSFPStatus, ptpControl);
+        switch(ptpControl)
+        {
+        default:
+        case 0:
+            outValue = NTV2_REFERENCE_FREERUN;
+            break;
+        case 1:
+            outValue = NTV2_REFERENCE_SFP1_PTP;
+            break;
+        case 2:
+            outValue = NTV2_REFERENCE_SFP2_PTP;
+            break;
+        }
+    }
 
 	if (_boardID == DEVICE_ID_KONAHDMI)
 		switch (outValue)
@@ -1687,6 +1705,7 @@ bool CNTV2Card::IsBufferSizeSetBySW (void)
 	return swControl != 0;
 }
 
+#if !defined(NTV2_DEPRECATE_17_2)
 bool CNTV2Card::GetFBSizeAndCountFromHW (ULWord & outSize, ULWord & outCount)
 {
 	if (!IsBufferSizeSetBySW())
@@ -1734,26 +1753,7 @@ bool CNTV2Card::GetFBSizeAndCountFromHW (ULWord & outSize, ULWord & outCount)
 	}
 	return true;
 }
-
-bool CNTV2Card::SetFrameBufferSize (const NTV2Framesize inSize)
-{
-	ULWord reg1Contents;
-
-	if (!::NTV2DeviceSoftwareCanChangeFrameBufferSize(_boardID))
-		return false;
-
-	if (!ReadRegister(kRegCh1Control, reg1Contents))
-		return false;
-
-	reg1Contents |= kRegMaskFrameSizeSetBySW;
-	reg1Contents &= ~kK2RegMaskFrameSize;
-	reg1Contents |= ULWord(inSize) << kK2RegShiftFrameSize;
-
-	if (!WriteRegister(kRegCh1Control, reg1Contents))
-		return false;
-
-	return GetFBSizeAndCountFromHW(_ulFrameBufferSize, _ulNumFrameBuffers);
-}
+#endif//!defined(NTV2_DEPRECATE_17_2)
 
 bool CNTV2Card::GetLargestFrameBufferFormatInUse(NTV2FrameBufferFormat & outFBF)
 {
@@ -1804,6 +1804,52 @@ bool CNTV2Card::GetPossibleConnections (NTV2PossibleConnections & outConnections
 			&&	CNTV2SignalRouter::GetPossibleConnections(ROMregs, outConnections);
 }
 
+bool CNTV2Card::GetAllWidgetInputs (NTV2InputXptIDSet & outInputs)
+{
+	outInputs.clear();
+	const ULWordSet widgetIDs (GetSupportedItems(kNTV2EnumsID_WidgetID));
+
+	for (ULWordSetConstIter iter(widgetIDs.begin());  iter != widgetIDs.end ();  ++iter)
+	{
+		const NTV2WidgetID wgtID(NTV2WidgetID(*iter + 0));
+		NTV2InputXptIDSet inputs;
+		CNTV2SignalRouter::GetWidgetInputs (wgtID, inputs);
+		for (NTV2InputXptIDSetConstIter it(inputs.begin());  it != inputs.end();  ++it)
+		{
+			if (CNTV2SignalRouter::WidgetIDToType(wgtID) == NTV2WidgetType_FrameStore)
+				if (!IsSupported(kDeviceCanDo425Mux))
+					if (!IsSupported(kDeviceCanDo8KVideo))
+						if (::NTV2InputCrosspointIDToString(*it, false).find("DS2") != string::npos)	//	is DS2 input?
+							continue;	//	do not include FrameStore DS2 inputs for IP25G
+			outInputs.insert(*it);
+		}
+	}
+	return true;
+}
+
+bool CNTV2Card::GetAllWidgetOutputs (NTV2OutputXptIDSet & outOutputs)
+{
+	outOutputs.clear();
+	const ULWordSet widgetIDs (GetSupportedItems(kNTV2EnumsID_WidgetID));
+
+	for (ULWordSetConstIter iter(widgetIDs.begin());	iter != widgetIDs.end ();  ++iter)
+	{
+		const NTV2WidgetID wgtID(NTV2WidgetID(*iter + 0));
+		NTV2OutputXptIDSet outputs;
+		CNTV2SignalRouter::GetWidgetOutputs (wgtID, outputs);
+		for (NTV2OutputXptIDSetConstIter it(outputs.begin());  it != outputs.end();  ++it)
+		{
+			if (CNTV2SignalRouter::WidgetIDToType(wgtID) == NTV2WidgetType_FrameStore)
+				if (!IsSupported(kDeviceCanDo425Mux))
+					if (!IsSupported(kDeviceCanDo8KVideo))
+						if (::NTV2OutputCrosspointIDToString(*it, false).find("DS2") != string::npos)	//	is DS2 output?
+							continue;	//	do not include FrameStore DS2 outputs for IP25G
+			outOutputs.insert(*it);
+		}
+	}
+	return true;
+}
+
 /////////////////////////////////
 
 // Method: SetFrameBufferFormat
@@ -1831,6 +1877,7 @@ bool CNTV2Card::SetFrameBufferFormat (NTV2Channel inChannel, NTV2FrameBufferForm
 	status =  WriteRegister (regNum, loValue, kRegMaskFrameFormat,		kRegShiftFrameFormat)
 		  &&  WriteRegister (regNum, hiValue, kRegMaskFrameFormatHiBit, kRegShiftFrameFormatHiBit);
 
+#if !defined(NTV2_DEPRECATE_17_2)
 	// If software set the frame buffer size, read the values from hardware
 	if ( !GetFBSizeAndCountFromHW(_ulFrameBufferSize, _ulNumFrameBuffers) &&
 		  IsBufferSizeChangeRequired(inChannel, currentGeometry, currentFormat, inNewFormat) )
@@ -1838,13 +1885,12 @@ bool CNTV2Card::SetFrameBufferFormat (NTV2Channel inChannel, NTV2FrameBufferForm
 		_ulFrameBufferSize = ::NTV2DeviceGetFrameBufferSize(_boardID,currentGeometry, inNewFormat);
 		_ulNumFrameBuffers = ::NTV2DeviceGetNumberFrameBuffers(_boardID,currentGeometry, inNewFormat);
 	}
+#endif//!defined(NTV2_DEPRECATE_17_2)
 
 	if (status)
 		{if (inNewFormat != currentFormat)
 			CVIDINFO("'" << GetDisplayName() << "': Channel " << DEC(UWord(inChannel)+1) << " FBF changed from "
-					<< ::NTV2FrameBufferFormatToString(currentFormat) << " to "
-					<< ::NTV2FrameBufferFormatToString(inNewFormat) << " (FBSize=" << xHEX0N(_ulFrameBufferSize,8)
-					<< " numFBs=" << DEC(_ulNumFrameBuffers) << ")");}
+					<< ::NTV2FrameBufferFormatToString(currentFormat) << " to " << ::NTV2FrameBufferFormatToString(inNewFormat));}
 	else
 		CVIDFAIL("'" << GetDisplayName() << "': Failed to change channel " << DEC(UWord(inChannel)+1) << " FBF from "
 				<< ::NTV2FrameBufferFormatToString(currentFormat) << " to " << ::NTV2FrameBufferFormatToString(inNewFormat));
@@ -1985,6 +2031,28 @@ bool CNTV2Card::GetFrameBufferOrientation (const NTV2Channel inChannel, NTV2FBOr
 	return CNTV2DriverInterface::ReadRegister (gChannelToControlRegNum[inChannel], outValue, kRegMaskFrameOrientation, kRegShiftFrameOrientation);
 }
 
+
+bool CNTV2Card::SetFrameBufferSize (const NTV2Framesize inSize)
+{
+	ULWord swCanChgFBSize(0);
+	if (!GetBoolParam(kDeviceSoftwareCanChangeFrameBufferSize, swCanChgFBSize)  ||  !swCanChgFBSize)
+		return false;
+
+	ULWord reg1Contents(0);
+	if (!ReadRegister(kRegCh1Control, reg1Contents))
+		return false;
+
+	reg1Contents |= kRegMaskFrameSizeSetBySW;
+	reg1Contents &= ~kK2RegMaskFrameSize;
+	reg1Contents |= ULWord(inSize) << kK2RegShiftFrameSize;
+	if (!WriteRegister(kRegCh1Control, reg1Contents))
+		return false;
+#if !defined(NTV2_DEPRECATE_17_2)
+	return GetFBSizeAndCountFromHW(_ulFrameBufferSize, _ulNumFrameBuffers);
+#else//NTV2_DEPRECATE_17_2
+	return true;
+#endif//defined(NTV2_DEPRECATE_17_2)
+}
 
 // Method: SetFrameBufferSize
 // Input:  NTV2Channel,	 NTV2K2Framesize
@@ -4713,14 +4781,6 @@ bool CNTV2Card::GetMultiRasterBypassEnable (bool & outEnabled)
 bool CNTV2Card::IsMultiRasterWidgetChannel (const NTV2Channel inChannel)
 {
 	return HasMultiRasterWidget() && inChannel == NTV2Channel(GetNumSupported(kDeviceGetNumVideoChannels));
-}
-
-bool CNTV2Card::IsBreakoutBoardConnected (void)
-{
-	bool BOBConnected(false);
-	return NTV2DeviceCanDoBreakoutBoard(_boardID)
-		   &&  CNTV2DriverInterface::ReadRegister(kRegBOBStatus, BOBConnected, kRegMaskBOBAbsent, kRegShiftBOBAbsent)
-		   &&  (BOBConnected == 0);
 }
 
 

@@ -16,6 +16,7 @@
 #include "ntv2version.h"
 #include "ntv2devicefeatures.h"	//	Required for NTV2DeviceCanDoVideoFormat
 #include "ajabase/system/lock.h"
+#include "ajabase/system/info.h"
 #include "ajabase/common/common.h"
 #if defined(AJALinux)
 	#include <string.h>	 // For memset
@@ -95,14 +96,17 @@ uint32_t CalcRowBytesForFormat (const NTV2FrameBufferFormat inPixelFormat, const
 		rowBytes = inPixelWidth;
 		break;
 		
+	case NTV2_FBF_10BIT_ARGB:
+        rowBytes = inPixelWidth * 5;
+        break;
+        
 	case NTV2_FBF_8BIT_YCBCR_420PL3:
 	case NTV2_FBF_8BIT_HDV:
 	case NTV2_FBF_10BIT_YCBCRA:
 	case NTV2_FBF_PRORES_DVCPRO:
 	case NTV2_FBF_PRORES_HDV:
-	case NTV2_FBF_10BIT_ARGB:
-	case NTV2_FBF_16BIT_ARGB:
-	case NTV2_FBF_8BIT_YCBCR_422PL3:
+    case NTV2_FBF_16BIT_ARGB:
+    case NTV2_FBF_8BIT_YCBCR_422PL3:
 	case NTV2_FBF_10BIT_RAW_RGB:
 	case NTV2_FBF_10BIT_RAW_YCBCR:
 	case NTV2_FBF_NUMFRAMEBUFFERFORMATS:
@@ -118,7 +122,7 @@ uint32_t CalcRowBytesForFormat (const NTV2FrameBufferFormat inPixelFormat, const
 
 bool UnpackLine_10BitYUVtoUWordSequence (const void * pIn10BitYUVLine, UWordSequence & out16BitYUVLine, ULWord inNumPixels)
 {
-	out16BitYUVLine.clear ();
+	out16BitYUVLine.clear();
 	const ULWord *	pInputLine	(reinterpret_cast <const ULWord *> (pIn10BitYUVLine));
 
 	if (!pInputLine)
@@ -128,8 +132,8 @@ bool UnpackLine_10BitYUVtoUWordSequence (const void * pIn10BitYUVLine, UWordSequ
 	if (inNumPixels % 6)
 		inNumPixels -= inNumPixels % 6;
 
-	const ULWord	totalULWords	(inNumPixels * 4 / 6);	//	4 ULWords per 6 pixels
-
+	const ULWord totalULWords (inNumPixels * 4 / 6);	//	4 ULWords per 6 pixels
+	out16BitYUVLine.reserve(totalULWords * 3);
 	for (ULWord inputCount (0);	 inputCount < totalULWords;	 inputCount++)
 	{
 		out16BitYUVLine.push_back ((pInputLine [inputCount]		 ) & 0x3FF);
@@ -142,18 +146,19 @@ bool UnpackLine_10BitYUVtoUWordSequence (const void * pIn10BitYUVLine, UWordSequ
 
 bool UnpackLine_10BitYUVtoUWordSequence (const void * pIn10BitYUVLine, const NTV2FormatDescriptor & inFormatDesc, UWordSequence & out16BitYUVLine)
 {
-	out16BitYUVLine.clear ();
+	out16BitYUVLine.clear();
 	const ULWord *	pInputLine	(reinterpret_cast <const ULWord *> (pIn10BitYUVLine));
 
 	if (!pInputLine)
 		return false;	//	bad pointer
-	if (!inFormatDesc.IsValid ())
+	if (!inFormatDesc.IsValid())
 		return false;	//	bad formatDesc
-	if (inFormatDesc.GetRasterWidth () < 6)
+	if (inFormatDesc.GetRasterWidth() < 6)
 		return false;	//	bad width
 	if (inFormatDesc.GetPixelFormat() != NTV2_FBF_10BIT_YCBCR)
 		return false;	//	wrong FBF
 
+	out16BitYUVLine.reserve(inFormatDesc.linePitch * 3);
 	for (ULWord inputCount (0);	 inputCount < inFormatDesc.linePitch;  inputCount++)
 	{
 		out16BitYUVLine.push_back ((pInputLine [inputCount]		 ) & 0x3FF);
@@ -164,9 +169,36 @@ bool UnpackLine_10BitYUVtoUWordSequence (const void * pIn10BitYUVLine, const NTV
 }
 
 
+bool UnpackLine_10BitARGBtoUWordSequence (const void * pIn10BitARGBLine, const NTV2FormatDescriptor & inFormatDesc, UWordSequence & out16BitARGBLine)
+{
+	out16BitARGBLine.clear();
+	const UByte *	pInputLine	(reinterpret_cast <const UByte *> (pIn10BitARGBLine));
+
+	if (!pInputLine)
+		return false;	//	bad pointer
+	if (!inFormatDesc.IsValid())
+		return false;	//	bad formatDesc
+	if (inFormatDesc.GetRasterWidth() < 1)
+		return false;	//	bad width
+	if (inFormatDesc.GetPixelFormat() != NTV2_FBF_10BIT_ARGB)
+		return false;	//	wrong FBF
+
+	out16BitARGBLine.reserve(inFormatDesc.linePitch * 4);
+	for (ULWord inputCount (0);	 inputCount < inFormatDesc.linePitch;  inputCount++)
+	{
+		out16BitARGBLine.push_back ((UWord(pInputLine[1] & 0x03) << 8) | (UWord(pInputLine[0] & 0xFF) >> 0));	//	B
+		out16BitARGBLine.push_back ((UWord(pInputLine[2] & 0x0F) << 6) | (UWord(pInputLine[1] & 0xFC) >> 2));	//	G
+		out16BitARGBLine.push_back ((UWord(pInputLine[3] & 0x3F) << 4) | (UWord(pInputLine[2] & 0xF0) >> 4));	//	R
+		out16BitARGBLine.push_back ((UWord(pInputLine[4] & 0xFF) << 2) | (UWord(pInputLine[3] & 0xC0) >> 6));	//	A
+        pInputLine += 5;
+	}
+	return true;
+}
+
+
 // UnPack10BitYCbCrBuffer
 // UnPack 10 Bit YCbCr Data to 16 bit Word per component
-void UnPack10BitYCbCrBuffer( uint32_t* packedBuffer, uint16_t* ycbcrBuffer, uint32_t numPixels )
+void UnPack10BitYCbCrBuffer (uint32_t* packedBuffer, uint16_t* ycbcrBuffer, uint32_t numPixels)
 {
 	for (  uint32_t sampleCount = 0, dataCount = 0; 
 		sampleCount < (numPixels*2) ; 
@@ -295,10 +327,16 @@ void ConvertUnpacked10BitYCbCrToPixelFormat(uint16_t *unPackedBuffer, uint32_t *
 			PackRGB10BitFor10BitRGBPacked(reinterpret_cast<RGBAlpha10BitPixel*>(packedBuffer), numPixels);
 			break;
 			
+        case NTV2_FBF_10BIT_ARGB:
+            ConvertLineto10BitRGB(unPackedBuffer, reinterpret_cast<RGBAlpha10BitPixel*>(packedBuffer), numPixels, bIsSD, bUseSmpteRange, bAlphaFromLuma);
+            PackRGB10BitFor10BitARGBPacked(reinterpret_cast<RGBAlpha10BitPixel*>(packedBuffer), numPixels);
+            break;
+
 		case NTV2_FBF_12BIT_RGB_PACKED:
 			ConvertLineto16BitRGB(unPackedBuffer, reinterpret_cast<RGBAlpha16BitPixel*>(packedBuffer), numPixels, bIsSD, bUseSmpteRange);
 			Convert16BitARGBTo12BitRGBPacked(reinterpret_cast<RGBAlpha16BitPixel*>(packedBuffer), reinterpret_cast<UByte*>(packedBuffer), numPixels);
 			break;
+            
 	#if defined(_DEBUG)
 		case NTV2_FBF_8BIT_DVCPRO:
 		case NTV2_FBF_8BIT_YCBCR_420PL3:
@@ -306,7 +344,6 @@ void ConvertUnpacked10BitYCbCrToPixelFormat(uint16_t *unPackedBuffer, uint32_t *
 		case NTV2_FBF_10BIT_YCBCRA:
 		case NTV2_FBF_PRORES_DVCPRO:
 		case NTV2_FBF_PRORES_HDV:
-		case NTV2_FBF_10BIT_ARGB:
 		case NTV2_FBF_16BIT_ARGB:
 		case NTV2_FBF_8BIT_YCBCR_422PL3:
 		case NTV2_FBF_10BIT_RAW_RGB:
@@ -622,7 +659,7 @@ bool UnpackLine_10BitYUVtoU16s (vector<uint16_t> & outYCbCrLine, const NTV2Buffe
 		return false;	//	bad width
 
 	const ULWord *	pInputLine	(reinterpret_cast<const ULWord*>(inDescriptor.GetRowAddress(inFrameBuffer.GetHostPointer(), inLineOffset)));
-
+	outYCbCrLine.reserve (inDescriptor.linePitch * 3);
 	for (ULWord inputCount(0);	inputCount < inDescriptor.linePitch;  inputCount++)
 	{
 		outYCbCrLine.push_back((pInputLine[inputCount]		) & 0x3FF);
@@ -1471,6 +1508,62 @@ static bool CopyRaster36BytesPer8Pixels (	UByte *			pDstBuffer,				//	Dest buffe
 }	//	CopyRaster20BytesPer16Pixels
 
 
+//	This function should work on all 5-byte-per-pixel formats
+static bool CopyRaster5BytesPerPixel (	UByte *			pDstBuffer,				//	Dest buffer to be modified
+										const ULWord	inDstBytesPerLine,		//	Dest buffer bytes per raster line (determines max width)
+										const UWord		inDstTotalLines,		//	Dest buffer total raster lines (max height)
+										const UWord		inDstVertLineOffset,	//	Vertical line offset into the dest raster where the top edge of the src image will appear
+										const UWord		inDstHorzPixelOffset,	//	Horizontal pixel offset into the dest raster where the left edge of the src image will appear -- must be evenly divisible by 6
+										const UByte *	pSrcBuffer,				//	Src buffer
+										const ULWord	inSrcBytesPerLine,		//	Src buffer bytes per raster line (determines max width)
+										const UWord		inSrcTotalLines,		//	Src buffer total raster lines (max height)
+										const UWord		inSrcVertLineOffset,	//	Src image top edge
+										const UWord		inSrcVertLinesToCopy,	//	Src image height
+										const UWord		inSrcHorzPixelOffset,	//	Src image left edge
+										const UWord		inSrcHorzPixelsToCopy)	//	Src image width
+{
+	const UWord FIVE_BYTES_PER_PIXEL (5);
+
+	if (inDstBytesPerLine % FIVE_BYTES_PER_PIXEL)	//	dst raster width (in bytes) must be evenly divisible by 5
+		return false;
+	if (inSrcBytesPerLine % FIVE_BYTES_PER_PIXEL)	//	src raster width (in bytes) must be evenly divisible by 5
+		return false;
+
+	const ULWord dstMaxPixelWidth (inDstBytesPerLine / FIVE_BYTES_PER_PIXEL);
+	const ULWord srcMaxPixelWidth (inSrcBytesPerLine / FIVE_BYTES_PER_PIXEL);
+	ULWord numHorzPixelsToCopy (inSrcHorzPixelsToCopy);
+	UWord numVertLinesToCopy (inSrcVertLinesToCopy);
+
+	if (inDstHorzPixelOffset >= dstMaxPixelWidth)	//	dst past right edge
+		return false;
+	if (inSrcHorzPixelOffset >= srcMaxPixelWidth)	//	src past right edge
+		return false;
+	if (inSrcHorzPixelOffset + inSrcHorzPixelsToCopy > UWord(srcMaxPixelWidth))
+		numHorzPixelsToCopy -= inSrcHorzPixelOffset + inSrcHorzPixelsToCopy - srcMaxPixelWidth; //	Clip to src raster's right edge
+	if (inDstHorzPixelOffset + numHorzPixelsToCopy > dstMaxPixelWidth)
+		numHorzPixelsToCopy = inDstHorzPixelOffset + numHorzPixelsToCopy - dstMaxPixelWidth;
+	if (inSrcVertLineOffset + inSrcVertLinesToCopy > inSrcTotalLines)
+		numVertLinesToCopy -= inSrcVertLineOffset + inSrcVertLinesToCopy - inSrcTotalLines;		//	Clip to src raster's bottom edge
+	if (numVertLinesToCopy + inDstVertLineOffset >= inDstTotalLines)
+	{
+		if (numVertLinesToCopy + inDstVertLineOffset > inDstTotalLines)
+			numVertLinesToCopy -= numVertLinesToCopy + inDstVertLineOffset - inDstTotalLines;
+		else
+			return true;
+	}
+
+	for (UWord lineNdx (0);	 lineNdx < numVertLinesToCopy;	lineNdx++)	//	for each raster line to copy
+	{
+		const UByte *	pSrcLine	(pSrcBuffer	 +	inSrcBytesPerLine * (inSrcVertLineOffset + lineNdx)	 +	inSrcHorzPixelOffset * FIVE_BYTES_PER_PIXEL);
+		UByte *			pDstLine	(pDstBuffer	 +	inDstBytesPerLine * (inDstVertLineOffset + lineNdx)	 +	inDstHorzPixelOffset * FIVE_BYTES_PER_PIXEL);
+        ::memcpy (pDstLine, pSrcLine, numHorzPixelsToCopy * FIVE_BYTES_PER_PIXEL);	//	copy the line
+	}
+
+	return true;
+
+}	//	CopyRaster5BytesPerPixel
+
+
 //	This function should work on all 4-byte-per-pixel formats
 static bool CopyRaster4BytesPerPixel (	UByte *			pDstBuffer,				//	Dest buffer to be modified
 										const ULWord	inDstBytesPerLine,		//	Dest buffer bytes per raster line (determines max width)
@@ -1708,14 +1801,17 @@ bool CopyRaster (const NTV2PixelFormat	inPixelFormat,			//	Pixel format of both 
 																					pSrcBuffer, inSrcBytesPerLine, inSrcTotalLines, inSrcVertLineOffset, inSrcVertLinesToCopy,
 																					inSrcHorzPixelOffset, inSrcHorzPixelsToCopy);
 	
-		case NTV2_FBF_8BIT_DVCPRO:	//	Lossy
+        case NTV2_FBF_10BIT_ARGB:				return CopyRaster5BytesPerPixel (pDstBuffer, inDstBytesPerLine, inDstTotalLines, inDstVertLineOffset, inDstHorzPixelOffset,
+                                                                                 pSrcBuffer, inSrcBytesPerLine, inSrcTotalLines, inSrcVertLineOffset, inSrcVertLinesToCopy,
+                                                                                 inSrcHorzPixelOffset, inSrcHorzPixelsToCopy);
+
+        case NTV2_FBF_8BIT_DVCPRO:	//	Lossy
 		case NTV2_FBF_8BIT_HDV:		//	Lossy
 		case NTV2_FBF_8BIT_YCBCR_420PL3:
 		case NTV2_FBF_10BIT_YCBCRA:
 		case NTV2_FBF_PRORES_DVCPRO:
 		case NTV2_FBF_PRORES_HDV:
 		case NTV2_FBF_10BIT_RGB_PACKED:
-		case NTV2_FBF_10BIT_ARGB:
 		case NTV2_FBF_16BIT_ARGB:
 		case NTV2_FBF_10BIT_RAW_RGB:
 		case NTV2_FBF_8BIT_YCBCR_422PL3:
@@ -3858,11 +3954,11 @@ NTV2FrameGeometry GetVANCFrameGeometry (const NTV2FrameGeometry inFrameGeometry,
 	return NTV2_FG_INVALID; //	fail
 }
 
-NTV2FrameGeometry GetGeometryFromFrameDimensions (const NTV2FrameDimensions & inFD)
+NTV2FrameGeometry GetGeometryFromFrameDimensions (const NTV2FrameSize & inFD)
 {
 	for (NTV2FrameGeometry fg(NTV2_FG_FIRST);  fg < NTV2_FG_NUMFRAMEGEOMETRIES;	 fg = NTV2FrameGeometry(fg+1))
-		if (::GetNTV2FrameGeometryWidth(fg) == inFD.GetWidth())
-			if (::GetNTV2FrameGeometryHeight(fg) == inFD.GetHeight())
+		if (::GetNTV2FrameGeometryWidth(fg) == inFD.width())
+			if (::GetNTV2FrameGeometryHeight(fg) == inFD.height())
 				return fg;
 	return NTV2_FG_INVALID;
 }
@@ -4237,172 +4333,6 @@ string NTV2ACFrameRange::toString (const bool inNormalized) const
 }
 
 
-//	More UI-friendly versions of above (used in Cables app)...
-static const char * m31Presets [M31_NUMVIDEOPRESETS] =
-{
-	"FILE 720x480 420 Planar 8 Bit 59.94i",				// M31_FILE_720X480_420_8_5994i			// 0
-	"FILE 720x480 420 Planar 8 Bit 59.94p",				// M31_FILE_720X480_420_8_5994p			// 1
-	"FILE 720x480 420 Planar 8 Bit 60i",				// M31_FILE_720X480_420_8_60i			// 2
-	"FILE 720x480 420 Planar 8 Bit 60p",				// M31_FILE_720X480_420_8_60p			// 3
-	"FILE 720x480 422 Planar 10 Bit 59.94i",			// M31_FILE_720X480_422_10_5994i		// 4
-	"FILE 720x480 422 Planar 10 Bit 59.94p",			// M31_FILE_720X480_422_10_5994p		// 5
-	"FILE 720x480 422 Planar 10 Bit 60i",				// M31_FILE_720X480_422_10_60i			// 6
-	"FILE 720x480 422 Planar 10 Bit 60p",				// M31_FILE_720X480_422_10_60p			// 7
-
-	"FILE 720x576 420 Planar 8 Bit 50i",				// M31_FILE_720X576_420_8_50i			// 8
-	"FILE 720x576 420 Planar 8 Bit 50p",				// M31_FILE_720X576_420_8_50p			// 9
-	"FILE 720x576 422 Planar 10 Bit 50i",				// M31_FILE_720X576_422_10_50i			// 10
-	"FILE 720x576 422 Planar 10 Bit 50p",				// M31_FILE_720X576_422_10_50p			// 11
-
-	"FILE 1280x720 420 Planar 8 Bit 2398p",				// M31_FILE_1280X720_420_8_2398p		// 12
-	"FILE 1280x720 420 Planar 8 Bit 24p",				// M31_FILE_1280X720_420_8_24p			// 13
-	"FILE 1280x720 420 Planar 8 Bit 25p",				// M31_FILE_1280X720_420_8_25p			// 14
-	"FILE 1280x720 420 Planar 8 Bit 29.97p",			// M31_FILE_1280X720_420_8_2997p		// 15
-	"FILE 1280x720 420 Planar 8 Bit 30p",				// M31_FILE_1280X720_420_8_30p			// 16
-	"FILE 1280x720 420 Planar 8 Bit 50p",				// M31_FILE_1280X720_420_8_50p			// 17
-	"FILE 1280x720 420 Planar 8 Bit 59.94p",			// M31_FILE_1280X720_420_8_5994p		// 18
-	"FILE 1280x720 420 Planar 8 Bit 60p",				// M31_FILE_1280X720_420_8_60p			// 19
-	
-	"FILE 1280x720 422 Planar 10 Bit 2398p",			// M31_FILE_1280X720_422_10_2398p		// 20
-	"FILE 1280x720 422 Planar 10 Bit 25p",				// M31_FILE_1280X720_422_10_24p			// 21
-	"FILE 1280x720 422 Planar 10 Bit 25p",				// M31_FILE_1280X720_422_10_25p			// 22
-	"FILE 1280x720 422 Planar 10 Bit 29.97p",			// M31_FILE_1280X720_422_10_2997p		// 23
-	"FILE 1280x720 422 Planar 10 Bit 30p",				// M31_FILE_1280X720_422_10_30p			// 24
-	"FILE 1280x720 422 Planar 10 Bit 50p",				// M31_FILE_1280X720_422_10_50p			// 25
-	"FILE 1280x720 422 Planar 10 Bit 59.94p",			// M31_FILE_1280X720_422_10_5994p		// 26
-	"FILE 1280x720 422 Planar 10 Bit 60p",				// M31_FILE_1280X720_422_10_60p			// 27
-
-	"FILE 1920x1080 420 Planar 8 Bit 2398p",			// M31_FILE_1920X1080_420_8_2398p		// 28
-	"FILE 1920x1080 420 Planar 8 Bit 24p",				// M31_FILE_1920X1080_420_8_24p			// 29
-	"FILE 1920x1080 420 Planar 8 Bit 25p",				// M31_FILE_1920X1080_420_8_25p			// 30
-	"FILE 1920x1080 420 Planar 8 Bit 29.97p",			// M31_FILE_1920X1080_420_8_2997p		// 31
-	"FILE 1920x1080 420 Planar 8 Bit 30p",				// M31_FILE_1920X1080_420_8_30p			// 32
-	"FILE 1920x1080 420 Planar 8 Bit 50i",				// M31_FILE_1920X1080_420_8_50i			// 33
-	"FILE 1920x1080 420 Planar 8 Bit 50p",				// M31_FILE_1920X1080_420_8_50p			// 34
-	"FILE 1920x1080 420 Planar 8 Bit 59.94i",			// M31_FILE_1920X1080_420_8_5994i		// 35
-	"FILE 1920x1080 420 Planar 8 Bit 59.94p",			// M31_FILE_1920X1080_420_8_5994p		// 36
-	"FILE 1920x1080 420 Planar 8 Bit 60i",				// M31_FILE_1920X1080_420_8_60i			// 37
-	"FILE 1920x1080 420 Planar 8 Bit 60p",				// M31_FILE_1920X1080_420_8_60p			// 38
-	
-	"FILE 1920x1080 422 Planar 10 Bit 2398p",			// M31_FILE_1920X1080_422_10_2398p		// 39
-	"FILE 1920x1080 422 Planar 10 Bit 24p",				// M31_FILE_1920X1080_422_10_24p		// 40
-	"FILE 1920x1080 422 Planar 10 Bit 25p",				// M31_FILE_1920X1080_422_10_25p		// 41
-	"FILE 1920x1080 422 Planar 10 Bit 29.97p",			// M31_FILE_1920X1080_422_10_2997p		// 42
-	"FILE 1920x1080 422 Planar 10 Bit 30p",				// M31_FILE_1920X1080_422_10_30p		// 43
-	"FILE 1920x1080 422 Planar 10 Bit 50i",				// M31_FILE_1920X1080_422_10_50i		// 44
-	"FILE 1920x1080 422 Planar 10 Bit 50p",				// M31_FILE_1920X1080_422_10_50p		// 45
-	"FILE 1920x1080 422 Planar 10 Bit 59.94i",			// M31_FILE_1920X1080_422_10_5994i		// 46
-	"FILE 1920x1080 422 Planar 10 Bit 59.94p",			// M31_FILE_1920X1080_422_10_5994p		// 47
-	"FILE 1920x1080 422 Planar 10 Bit 60i",				// M31_FILE_1920X1080_422_10_60i		// 48
-	"FILE 1920x1080 422 Planar 10 Bit 60p",				// M31_FILE_1920X1080_422_10_60p		// 49
-
-	"FILE 2048x1080 420 Planar 8 Bit 2398p",			// M31_FILE_2048X1080_420_8_2398p		// 50
-	"FILE 2048x1080 420 Planar 8 Bit 24p",				// M31_FILE_2048X1080_420_8_24p			// 51
-	"FILE 2048x1080 420 Planar 8 Bit 25p",				// M31_FILE_2048X1080_420_8_25p			// 52
-	"FILE 2048x1080 420 Planar 8 Bit 29.97p",			// M31_FILE_2048X1080_420_8_2997p		// 53
-	"FILE 2048x1080 420 Planar 8 Bit 30p",				// M31_FILE_2048X1080_420_8_30p			// 54
-	"FILE 2048x1080 420 Planar 8 Bit 50p",				// M31_FILE_2048X1080_420_8_50p			// 55
-	"FILE 2048x1080 420 Planar 8 Bit 59.94p",			// M31_FILE_2048X1080_420_8_5994p		// 56
-	"FILE 2048x1080 420 Planar 8 Bit 60p",				// M31_FILE_2048X1080_420_8_60p			// 57
-	
-	"FILE 2048x1080 422 Planar 10 Bit 2398p",			// M31_FILE_2048X1080_422_10_2398p		// 58
-	"FILE 2048x1080 422 Planar 10 Bit 24p",				// M31_FILE_2048X1080_422_10_24p		// 59
-	"FILE 2048x1080 422 Planar 10 Bit 25p",				// M31_FILE_2048X1080_422_10_25p		// 60
-	"FILE 2048x1080 422 Planar 10 Bit 29.97p",			// M31_FILE_2048X1080_422_10_2997p		// 61
-	"FILE 2048x1080 422 Planar 10 Bit 30p",				// M31_FILE_2048X1080_422_10_30p		// 62
-	"FILE 2048x1080 422 Planar 10 Bit 50p",				// M31_FILE_2048X1080_422_10_50p		// 63
-	"FILE 2048x1080 422 Planar 10 Bit 59.94p",			// M31_FILE_2048X1080_422_10_5994p		// 64
-	"FILE 2048x1080 422 Planar 10 Bit 60p",				// M31_FILE_2048X1080_422_10_60p		// 65
-
-	"FILE 3840x2160 420 Planar 8 Bit 2398p",			// M31_FILE_3840X2160_420_8_2398p		// 66
-	"FILE 3840x2160 420 Planar 8 Bit 24p",				// M31_FILE_3840X2160_420_8_24p			// 67
-	"FILE 3840x2160 420 Planar 8 Bit 25p",				// M31_FILE_3840X2160_420_8_25p			// 68
-	"FILE 3840x2160 420 Planar 8 Bit 29.97p",			// M31_FILE_3840X2160_420_8_2997p		// 69
-	"FILE 3840x2160 420 Planar 8 Bit 30p",				// M31_FILE_3840X2160_420_8_30p			// 70
-	"FILE 3840x2160 420 Planar 8 Bit 50p",				// M31_FILE_3840X2160_420_8_50p			// 71
-	"FILE 3840x2160 420 Planar 8 Bit 59.94p",			// M31_FILE_3840X2160_420_8_5994p		// 72
-	"FILE 3840x2160 420 Planar 8 Bit 60p",				// M31_FILE_3840X2160_420_8_60p			// 73
-
-	"FILE 3840x2160 420 Planar 10 Bit 50p",				// M31_FILE_3840X2160_420_10_50p		// 74
-	"FILE 3840x2160 420 Planar 10 Bit 59.94p",			// M31_FILE_3840X2160_420_10_5994p		// 75
-	"FILE 3840x2160 420 Planar 10 Bit 60p",				// M31_FILE_3840X2160_420_10_60p		// 76
-  
-	"FILE 3840x2160 422 Planar 8 Bit 2398p",			// M31_FILE_3840X2160_422_8_2398p		// 77
-	"FILE 3840x2160 422 Planar 8 Bit 24p",				// M31_FILE_3840X2160_422_8_24p			// 78
-	"FILE 3840x2160 422 Planar 8 Bit 25p",				// M31_FILE_3840X2160_422_8_25p			// 79
-	"FILE 3840x2160 422 Planar 8 Bit 29.97p",			// M31_FILE_3840X2160_422_8_2997p		// 80
-	"FILE 3840x2160 422 Planar 8 Bit 30p",				// M31_FILE_3840X2160_422_8_30p			// 81
-	"FILE 3840x2160 422 Planar 8 Bit 50p",				// M31_FILE_3840X2160_422_8_60p			// 82
-	"FILE 3840x2160 422 Planar 8 Bit 59.94p",			// M31_FILE_3840X2160_422_8_5994p		// 83
-	"FILE 3840x2160 422 Planar 8 Bit 60p",				// M31_FILE_3840X2160_422_8_60p			// 84
-	
-	"FILE 3840x2160 422 Planar 10 Bit 2398p",			// M31_FILE_3840X2160_422_10_2398p		// 85
-	"FILE 3840x2160 422 Planar 10 Bit 24p",				// M31_FILE_3840X2160_422_10_24p		// 86
-	"FILE 3840x2160 422 Planar 10 Bit 25p",				// M31_FILE_3840X2160_422_10_25p		// 87
-	"FILE 3840x2160 422 Planar 10 Bit 29.97p",			// M31_FILE_3840X2160_422_10_2997p		// 88
-	"FILE 3840x2160 422 Planar 10 Bit 30p",				// M31_FILE_3840X2160_422_10_30p		// 89
-	"FILE 3840x2160 422 Planar 10 Bit 50p",				// M31_FILE_3840X2160_422_10_50p		// 90
-	"FILE 3840x2160 422 Planar 10 Bit 59.94p",			// M31_FILE_3840X2160_422_10_5994p		// 91
-	"FILE 3840x2160 422 Planar 10 Bit 60p",				// M31_FILE_3840X2160_422_10_60p		// 92
-	
-	"FILE 4096x2160 420 Planar 10 Bit 5994p",			// M31_FILE_4096X2160_420_10_5994p,		// 93
-	"FILE 4096x2160 420 Planar 10 Bit 60p",				// M31_FILE_4096X2160_420_10_60p,		// 94
-	"FILE 4096x2160 422 Planar 10 Bit 50p",				// M31_FILE_4096X2160_422_10_50p,		// 95
-	"FILE 4096x2160 422 Planar 10 Bit 5994p IOnly",		// M31_FILE_4096X2160_422_10_5994p_IF,	// 96
-	"FILE 4096x2160 422 Planar 10 Bit 60p IOnly",		// M31_FILE_4096X2160_422_10_60p_IF,	// 97
-	
-	"VIF 720x480 420 Planar 8 Bit 59.94i",				// M31_VIF_720X480_420_8_5994i			// 98
-	"VIF 720x480 420 Planar 8 Bit 59.94p",				// M31_VIF_720X480_420_8_5994p			// 99
-	"VIF 720x480 420 Planar 8 Bit 60i",					// M31_VIF_720X480_420_8_60i			// 100
-	"VIF 720x480 420 Planar 8 Bit 60p",					// M31_VIF_720X480_420_8_60p			// 101
-	"VIF 720x480 422 Planar 10 Bit 59.94i",				// M31_VIF_720X480_422_10_5994i			// 102
-	"VIF 720x480 422 Planar 10 Bit 59.94p",				// M31_VIF_720X480_422_10_5994p			// 103
-	"VIF 720x480 422 Planar 10 Bit 60i",				// M31_VIF_720X480_422_10_60i			// 104
-	"VIF 720x480 422 Planar 10 Bit 60p",				// M31_VIF_720X480_422_10_60p			// 105
-
-	"VIF 720x576 420 Planar 8 Bit 50i",					// M31_VIF_720X576_420_8_50i			// 106
-	"VIF 720x576 420 Planar 8 Bit 50p",					// M31_VIF_720X576_420_8_50p			// 107
-	"VIF 720x576 422 Planar 10 Bit 50i",				// M31_VIF_720X576_422_10_50i			// 108
-	"VIF 720x576 422 Planar 10 Bit 50p",				// M31_VIF_720X576_422_10_50p			// 109
-
-	"VIF 1280x720 420 Planar 8 Bit 50p",				// M31_VIF_1280X720_420_8_50p			// 110
-	"VIF 1280x720 420 Planar 8 Bit 59.94p",				// M31_VIF_1280X720_420_8_5994p			// 111
-	"VIF 1280x720 420 Planar 8 Bit 60p",				// M31_VIF_1280X720_420_8_60p			// 112
-	"VIF 1280x720 422 Planar 10 Bit 50p",				// M31_VIF_1280X720_422_10_50p			// 113
-	"VIF 1280x720 422 Planar 10 Bit 59.94p",			// M31_VIF_1280X720_422_10_5994p		// 114
-	"VIF 1280x720 422 Planar 10 Bit 60p",				// M31_VIF_1280X720_422_10_60p			// 115
-
-	"VIF 1920x1080 420 Planar 8 Bit 50i",				// M31_VIF_1920X1080_420_8_50i			// 116
-	"VIF 1920x1080 420 Planar 8 Bit 50p",				// M31_VIF_1920X1080_420_8_50p			// 117
-	"VIF 1920x1080 420 Planar 8 Bit 59.94i",			// M31_VIF_1920X1080_420_8_5994i		// 118
-	"VIF 1920x1080 420 Planar 8 Bit 59.94p",			// M31_VIF_1920X1080_420_8_5994p		// 119
-	"VIF 1920x1080 420 Planar 8 Bit 60i",				// M31_VIF_1920X1080_420_8_60i			// 120
-	"VIF 1920x1080 420 Planar 8 Bit 60p",				// M31_VIF_1920X1080_420_8_60p			// 121
-	"VIF 1920x1080 420 Planar 10 Bit 50i",				// M31_VIF_1920X1080_420_10_50i			// 122
-	"VIF 1920x1080 420 Planar 10 Bit 50p",				// M31_VIF_1920X1080_420_10_50p			// 123
-	"VIF 1920x1080 420 Planar 10 Bit 59.94i",			// M31_VIF_1920X1080_420_10_5994i		// 124
-	"VIF 1920x1080 420 Planar 10 Bit 59.94p",			// M31_VIF_1920X1080_420_10_5994p		// 125
-	"VIF 1920x1080 420 Planar 10 Bit 60i",				// M31_VIF_1920X1080_420_10_60i			// 126
-	"VIF 1920x1080 420 Planar 10 Bit 60p",				// M31_VIF_1920X1080_420_10_60p			// 127
-	"VIF 1920x1080 422 Planar 10 Bit 59.94i",			// M31_VIF_1920X1080_422_10_5994i		// 128
-	"VIF 1920x1080 422 Planar 10 Bit 59.94p",			// M31_VIF_1920X1080_422_10_5994p		// 129
-	"VIF 1920x1080 422 Planar 10 Bit 60i",				// M31_VIF_1920X1080_422_10_60i			// 130
-	"VIF 1920x1080 422 Planar 10 Bit 60p",				// M31_VIF_1920X1080_422_10_60p			// 131
-  
-	"VIF 3840x2160 420 Planar 8 Bit 30p",				// M31_VIF_3840X2160_420_8_30p			// 132
-	"VIF 3840x2160 420 Planar 8 Bit 50p",				// M31_VIF_3840X2160_420_8_50p			// 133
-	"VIF 3840x2160 420 Planar 8 Bit 59.94p",			// M31_VIF_3840X2160_420_8_5994p		// 134
-	"VIF 3840x2160 420 Planar 8 Bit 60p",				// M31_VIF_3840X2160_420_8_5994p		// 135
-	"VIF 3840x2160 420 Planar 10 Bit 50p",				// M31_VIF_3840X2160_420_8_60p			// 136
-	"VIF 3840x2160 420 Planar 10 Bit 59.94p",			// M31_VIF_3840X2160_420_8_60p			// 137
-	"VIF 3840x2160 420 Planar 10 Bit 60p",				// M31_VIF_3840X2160_420_10_5994p		// 138
-	
-	"VIF 3840x2160 422 Planar 10 Bit 30p",				// M31_VIF_3840X2160_422_10_30p			// 139
-	"VIF 3840x2160 422 Planar 10 Bit 50p",				// M31_VIF_3840X2160_422_10_50p			// 140
-	"VIF 3840x2160 422 Planar 10 Bit 59.94p",			// M31_VIF_3840X2160_422_10_5994p		// 141
-	"VIF 3840x2160 422 Planar 10 Bit 60p",				// M31_VIF_3840X2160_422_10_60p			// 142
-};
-
 // Extracts a channel pair or all channels from the
 // NTV2 channel buffer that is retrieved from the hardware.
 int RecordCopyAudio(PULWord pAja, PULWord pSR, int iStartSample, int iNumBytes, int iChan0,
@@ -4684,11 +4614,13 @@ std::string NTV2DeviceIDToString (const NTV2DeviceID inValue,	const bool inForRe
 		case DEVICE_ID_CORVID24:				return inForRetailDisplay ? "Corvid 24"					: "Corvid24";
 		case DEVICE_ID_CORVID3G:				return inForRetailDisplay ? "Corvid 3G"					: "Corvid3G";
 		case DEVICE_ID_CORVID44:				return inForRetailDisplay ? "Corvid 44"					: "Corvid44";
-		case DEVICE_ID_CORVID44_2X4K:			return inForRetailDisplay ? "Corvid 44 2x4K"			: "Corvid44-2x4K";
-		case DEVICE_ID_CORVID44_8K:				return inForRetailDisplay ? "Corvid 44 8K"				: "Corvid44-8K";
-		case DEVICE_ID_CORVID44_8KMK:			return inForRetailDisplay ? "Corvid 44 8KMK"			: "Corvid44-8KMK";
-		case DEVICE_ID_CORVID44_PLNR:			return inForRetailDisplay ? "Corvid 44 PLNR"			: "Corvid44-PLNR";
+		case DEVICE_ID_CORVID44_GEN3:			return inForRetailDisplay ? "Corvid 44 Gen3"			: "Corvid-44-Gen3";
+		case DEVICE_ID_CORVID44_2X4K:			return inForRetailDisplay ? "Corvid 44 12G 2x4K"		: "Corvid44-12G-2x4K";
+		case DEVICE_ID_CORVID44_8K:				return inForRetailDisplay ? "Corvid 44 12G 8K"			: "Corvid44-12G-8K";
+		case DEVICE_ID_CORVID44_8KMK:			return inForRetailDisplay ? "Corvid 44 12G 8KMK"		: "Corvid44-12G-8KMK";
+		case DEVICE_ID_CORVID44_PLNR:			return inForRetailDisplay ? "Corvid 44 12G PLNR"		: "Corvid44-12G-PLNR";
 		case DEVICE_ID_CORVID88:				return inForRetailDisplay ? "Corvid 88"					: "Corvid88";
+		case DEVICE_ID_CORVID88_GEN3:			return inForRetailDisplay ? "Corvid 88 Gen3"			: "Corvid-88-Gen3";
 		case DEVICE_ID_CORVIDHBR:				return inForRetailDisplay ? "Corvid HB-R"				: "CorvidHBR";
 		case DEVICE_ID_CORVIDHEVC:				return inForRetailDisplay ? "Corvid HEVC"				: "CorvidHEVC";
 		case DEVICE_ID_IO4K:					return "Io4K";
@@ -4700,6 +4632,8 @@ std::string NTV2DeviceIDToString (const NTV2DeviceID inValue,	const bool inForRe
 		case DEVICE_ID_IOIP_2110_RGB12:			return inForRetailDisplay ? "Avid DNxIP s2110_RGB12"	: "IoIP-s2110_RGB12";
 		case DEVICE_ID_IOX3:					return "IoX3";
 		case DEVICE_ID_IOXT:					return "IoXT";
+		case DEVICE_ID_IP25_R:					return "IP25-R";
+		case DEVICE_ID_IP25_T:					return "IP25-T";
 		case DEVICE_ID_KONA1:					return inForRetailDisplay ? "Kona 1"					: "Kona1";
 		case DEVICE_ID_KONA3G:					return inForRetailDisplay ? "KONA 3G"					: "Kona3G";
 		case DEVICE_ID_KONA3GQUAD:				return inForRetailDisplay ? "KONA 3G QUAD"				: "Kona3GQuad"; //	Used to be "KONA 3G" for retail display
@@ -5777,9 +5711,9 @@ NTV2VideoFormat GetOutputForConversionMode (const NTV2ConversionMode conversionM
 }
 
 
-ostream & operator << (ostream & inOutStream, const NTV2FrameDimensions inFrameDimensions)
+ostream & operator << (ostream & inOutStream, const NTV2FrameSize & inFrameDimensions)
 {
-	return inOutStream	<< inFrameDimensions.Width() << "Wx" << inFrameDimensions.Height() << "H";
+	return inOutStream	<< inFrameDimensions.width() << "Wx" << inFrameDimensions.height() << "H";
 }
 
 
@@ -6330,10 +6264,18 @@ string NTV2WidgetIDToString (const NTV2WidgetID inValue, const bool inCompactDis
 		NTV2UTILS_ENUM_CASE_RETURN_VAL_OR_ENUM_STR(inCompactDisplay, "12GSDIIn2", NTV2_Wgt12GSDIIn2);
 		NTV2UTILS_ENUM_CASE_RETURN_VAL_OR_ENUM_STR(inCompactDisplay, "12GSDIIn3", NTV2_Wgt12GSDIIn3);
 		NTV2UTILS_ENUM_CASE_RETURN_VAL_OR_ENUM_STR(inCompactDisplay, "12GSDIIn4", NTV2_Wgt12GSDIIn4);
+		NTV2UTILS_ENUM_CASE_RETURN_VAL_OR_ENUM_STR(inCompactDisplay, "12GSDIIn5", NTV2_Wgt12GSDIIn5);
+		NTV2UTILS_ENUM_CASE_RETURN_VAL_OR_ENUM_STR(inCompactDisplay, "12GSDIIn6", NTV2_Wgt12GSDIIn6);
+		NTV2UTILS_ENUM_CASE_RETURN_VAL_OR_ENUM_STR(inCompactDisplay, "12GSDIIn7", NTV2_Wgt12GSDIIn7);
+		NTV2UTILS_ENUM_CASE_RETURN_VAL_OR_ENUM_STR(inCompactDisplay, "12GSDIIn8", NTV2_Wgt12GSDIIn8);
 		NTV2UTILS_ENUM_CASE_RETURN_VAL_OR_ENUM_STR(inCompactDisplay, "12GSDIOut1", NTV2_Wgt12GSDIOut1);
 		NTV2UTILS_ENUM_CASE_RETURN_VAL_OR_ENUM_STR(inCompactDisplay, "12GSDIOut2", NTV2_Wgt12GSDIOut2);
 		NTV2UTILS_ENUM_CASE_RETURN_VAL_OR_ENUM_STR(inCompactDisplay, "12GSDIOut3", NTV2_Wgt12GSDIOut3);
 		NTV2UTILS_ENUM_CASE_RETURN_VAL_OR_ENUM_STR(inCompactDisplay, "12GSDIOut4", NTV2_Wgt12GSDIOut4);
+		NTV2UTILS_ENUM_CASE_RETURN_VAL_OR_ENUM_STR(inCompactDisplay, "12GSDIOut5", NTV2_Wgt12GSDIOut5);
+		NTV2UTILS_ENUM_CASE_RETURN_VAL_OR_ENUM_STR(inCompactDisplay, "12GSDIOut6", NTV2_Wgt12GSDIOut6);
+		NTV2UTILS_ENUM_CASE_RETURN_VAL_OR_ENUM_STR(inCompactDisplay, "12GSDIOut7", NTV2_Wgt12GSDIOut7);
+		NTV2UTILS_ENUM_CASE_RETURN_VAL_OR_ENUM_STR(inCompactDisplay, "12GSDIOut8", NTV2_Wgt12GSDIOut8);
 		NTV2UTILS_ENUM_CASE_RETURN_VAL_OR_ENUM_STR(inCompactDisplay, "HDMIv4In1", NTV2_WgtHDMIIn1v4);
 		NTV2UTILS_ENUM_CASE_RETURN_VAL_OR_ENUM_STR(inCompactDisplay, "HDMIv4In2", NTV2_WgtHDMIIn2v4);
 		NTV2UTILS_ENUM_CASE_RETURN_VAL_OR_ENUM_STR(inCompactDisplay, "HDMIv4In3", NTV2_WgtHDMIIn3v4);
@@ -6341,6 +6283,10 @@ string NTV2WidgetIDToString (const NTV2WidgetID inValue, const bool inCompactDis
 		NTV2UTILS_ENUM_CASE_RETURN_VAL_OR_ENUM_STR(inCompactDisplay, "HDMIv5In1", NTV2_WgtHDMIIn1v5);
 		NTV2UTILS_ENUM_CASE_RETURN_VAL_OR_ENUM_STR(inCompactDisplay, "HDMIv4Out1", NTV2_WgtHDMIOut1v4);
 		NTV2UTILS_ENUM_CASE_RETURN_VAL_OR_ENUM_STR(inCompactDisplay, "HDMIv5Out1", NTV2_WgtHDMIOut1v5);
+		NTV2UTILS_ENUM_CASE_RETURN_VAL_OR_ENUM_STR(inCompactDisplay, "HDMIv6Out1", NTV2_WgtHDMIOut1v6);
+		NTV2UTILS_ENUM_CASE_RETURN_VAL_OR_ENUM_STR(inCompactDisplay, "HDMIv6Out2", NTV2_WgtHDMIOut2v6);
+		NTV2UTILS_ENUM_CASE_RETURN_VAL_OR_ENUM_STR(inCompactDisplay, "HDMIv6Out3", NTV2_WgtHDMIOut3v6);
+		NTV2UTILS_ENUM_CASE_RETURN_VAL_OR_ENUM_STR(inCompactDisplay, "HDMIv6Out4", NTV2_WgtHDMIOut4v6);
 		NTV2UTILS_ENUM_CASE_RETURN_VAL_OR_ENUM_STR(inCompactDisplay, "MultiLinkOut1", NTV2_WgtMultiLinkOut1);
 		NTV2UTILS_ENUM_CASE_RETURN_VAL_OR_ENUM_STR(inCompactDisplay, "MultiLinkOut2", NTV2_WgtMultiLinkOut2);
 		NTV2UTILS_ENUM_CASE_RETURN_VAL_OR_ENUM_STR(inCompactDisplay, "3DLUT1", NTV2_Wgt3DLUT1);
@@ -6388,6 +6334,7 @@ string NTV2WidgetTypeToString (const NTV2WidgetType inValue, const bool inCompac
 		NTV2UTILS_ENUM_CASE_RETURN_VAL_OR_ENUM_STR(inCompactDisplay, "HDMI Output V3", NTV2WidgetType_HDMIOutV3);
 		NTV2UTILS_ENUM_CASE_RETURN_VAL_OR_ENUM_STR(inCompactDisplay, "HDMI Output V4", NTV2WidgetType_HDMIOutV4);
 		NTV2UTILS_ENUM_CASE_RETURN_VAL_OR_ENUM_STR(inCompactDisplay, "HDMI Output V5", NTV2WidgetType_HDMIOutV5);
+		NTV2UTILS_ENUM_CASE_RETURN_VAL_OR_ENUM_STR(inCompactDisplay, "HDMI Output V6", NTV2WidgetType_HDMIOutV6);
 		NTV2UTILS_ENUM_CASE_RETURN_VAL_OR_ENUM_STR(inCompactDisplay, "SMPTE 425 Mux", NTV2WidgetType_SMPTE425Mux);
 		NTV2UTILS_ENUM_CASE_RETURN_VAL_OR_ENUM_STR(inCompactDisplay, "SDI Input 12G", NTV2WidgetType_SDIIn12G);
 		NTV2UTILS_ENUM_CASE_RETURN_VAL_OR_ENUM_STR(inCompactDisplay, "SDI Output 12G", NTV2WidgetType_SDIOut12G);
@@ -6402,7 +6349,7 @@ string NTV2WidgetTypeToString (const NTV2WidgetType inValue, const bool inCompac
 	return "";
 }
 
-string NTV2TaskModeToString (const NTV2EveryFrameTaskMode inValue, const bool inCompactDisplay)
+string NTV2TaskModeToString (const NTV2TaskMode inValue, const bool inCompactDisplay)
 {
 	switch (inValue)
 	{
@@ -7026,178 +6973,344 @@ string NTV2FrameBufferFormatToString (const NTV2FrameBufferFormat inValue,	const
 	return "";
 }
 
-
-string NTV2M31VideoPresetToString (const M31VideoPreset inValue, const bool inForRetailDisplay)
-{
-	if (inForRetailDisplay)
-		return m31Presets [inValue];	//	frameBufferFormatString (inValue);
-	
-	switch (inValue)
+#if !defined(NTV2_DEPRECATE_17_6)
+	//	More UI-friendly versions of above (used in Cables app)...
+	static const char * m31Presets [M31_NUMVIDEOPRESETS] =
 	{
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_720X480_420_8_5994i);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_720X480_420_8_5994p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_720X480_420_8_60i);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_720X480_420_8_60p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_720X480_422_10_5994i);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_720X480_422_10_5994p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_720X480_422_10_60i);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_720X480_422_10_60p);
+		"FILE 720x480 420 Planar 8 Bit 59.94i",				// M31_FILE_720X480_420_8_5994i			// 0
+		"FILE 720x480 420 Planar 8 Bit 59.94p",				// M31_FILE_720X480_420_8_5994p			// 1
+		"FILE 720x480 420 Planar 8 Bit 60i",				// M31_FILE_720X480_420_8_60i			// 2
+		"FILE 720x480 420 Planar 8 Bit 60p",				// M31_FILE_720X480_420_8_60p			// 3
+		"FILE 720x480 422 Planar 10 Bit 59.94i",			// M31_FILE_720X480_422_10_5994i		// 4
+		"FILE 720x480 422 Planar 10 Bit 59.94p",			// M31_FILE_720X480_422_10_5994p		// 5
+		"FILE 720x480 422 Planar 10 Bit 60i",				// M31_FILE_720X480_422_10_60i			// 6
+		"FILE 720x480 422 Planar 10 Bit 60p",				// M31_FILE_720X480_422_10_60p			// 7
 
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_720X576_420_8_50i);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_720X576_420_8_50p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_720X576_422_10_50i);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_720X576_422_10_50p);
+		"FILE 720x576 420 Planar 8 Bit 50i",				// M31_FILE_720X576_420_8_50i			// 8
+		"FILE 720x576 420 Planar 8 Bit 50p",				// M31_FILE_720X576_420_8_50p			// 9
+		"FILE 720x576 422 Planar 10 Bit 50i",				// M31_FILE_720X576_422_10_50i			// 10
+		"FILE 720x576 422 Planar 10 Bit 50p",				// M31_FILE_720X576_422_10_50p			// 11
 
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1280X720_420_8_2398p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1280X720_420_8_24p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1280X720_420_8_25p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1280X720_420_8_2997p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1280X720_420_8_30p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1280X720_420_8_50p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1280X720_420_8_5994p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1280X720_420_8_60p);
+		"FILE 1280x720 420 Planar 8 Bit 2398p",				// M31_FILE_1280X720_420_8_2398p		// 12
+		"FILE 1280x720 420 Planar 8 Bit 24p",				// M31_FILE_1280X720_420_8_24p			// 13
+		"FILE 1280x720 420 Planar 8 Bit 25p",				// M31_FILE_1280X720_420_8_25p			// 14
+		"FILE 1280x720 420 Planar 8 Bit 29.97p",			// M31_FILE_1280X720_420_8_2997p		// 15
+		"FILE 1280x720 420 Planar 8 Bit 30p",				// M31_FILE_1280X720_420_8_30p			// 16
+		"FILE 1280x720 420 Planar 8 Bit 50p",				// M31_FILE_1280X720_420_8_50p			// 17
+		"FILE 1280x720 420 Planar 8 Bit 59.94p",			// M31_FILE_1280X720_420_8_5994p		// 18
+		"FILE 1280x720 420 Planar 8 Bit 60p",				// M31_FILE_1280X720_420_8_60p			// 19
+	
+		"FILE 1280x720 422 Planar 10 Bit 2398p",			// M31_FILE_1280X720_422_10_2398p		// 20
+		"FILE 1280x720 422 Planar 10 Bit 25p",				// M31_FILE_1280X720_422_10_24p			// 21
+		"FILE 1280x720 422 Planar 10 Bit 25p",				// M31_FILE_1280X720_422_10_25p			// 22
+		"FILE 1280x720 422 Planar 10 Bit 29.97p",			// M31_FILE_1280X720_422_10_2997p		// 23
+		"FILE 1280x720 422 Planar 10 Bit 30p",				// M31_FILE_1280X720_422_10_30p			// 24
+		"FILE 1280x720 422 Planar 10 Bit 50p",				// M31_FILE_1280X720_422_10_50p			// 25
+		"FILE 1280x720 422 Planar 10 Bit 59.94p",			// M31_FILE_1280X720_422_10_5994p		// 26
+		"FILE 1280x720 422 Planar 10 Bit 60p",				// M31_FILE_1280X720_422_10_60p			// 27
 
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1280X720_422_10_2398p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1280X720_422_10_24p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1280X720_422_10_25p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1280X720_422_10_2997p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1280X720_422_10_30p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1280X720_422_10_50p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1280X720_422_10_5994p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1280X720_422_10_60p);
+		"FILE 1920x1080 420 Planar 8 Bit 2398p",			// M31_FILE_1920X1080_420_8_2398p		// 28
+		"FILE 1920x1080 420 Planar 8 Bit 24p",				// M31_FILE_1920X1080_420_8_24p			// 29
+		"FILE 1920x1080 420 Planar 8 Bit 25p",				// M31_FILE_1920X1080_420_8_25p			// 30
+		"FILE 1920x1080 420 Planar 8 Bit 29.97p",			// M31_FILE_1920X1080_420_8_2997p		// 31
+		"FILE 1920x1080 420 Planar 8 Bit 30p",				// M31_FILE_1920X1080_420_8_30p			// 32
+		"FILE 1920x1080 420 Planar 8 Bit 50i",				// M31_FILE_1920X1080_420_8_50i			// 33
+		"FILE 1920x1080 420 Planar 8 Bit 50p",				// M31_FILE_1920X1080_420_8_50p			// 34
+		"FILE 1920x1080 420 Planar 8 Bit 59.94i",			// M31_FILE_1920X1080_420_8_5994i		// 35
+		"FILE 1920x1080 420 Planar 8 Bit 59.94p",			// M31_FILE_1920X1080_420_8_5994p		// 36
+		"FILE 1920x1080 420 Planar 8 Bit 60i",				// M31_FILE_1920X1080_420_8_60i			// 37
+		"FILE 1920x1080 420 Planar 8 Bit 60p",				// M31_FILE_1920X1080_420_8_60p			// 38
+	
+		"FILE 1920x1080 422 Planar 10 Bit 2398p",			// M31_FILE_1920X1080_422_10_2398p		// 39
+		"FILE 1920x1080 422 Planar 10 Bit 24p",				// M31_FILE_1920X1080_422_10_24p		// 40
+		"FILE 1920x1080 422 Planar 10 Bit 25p",				// M31_FILE_1920X1080_422_10_25p		// 41
+		"FILE 1920x1080 422 Planar 10 Bit 29.97p",			// M31_FILE_1920X1080_422_10_2997p		// 42
+		"FILE 1920x1080 422 Planar 10 Bit 30p",				// M31_FILE_1920X1080_422_10_30p		// 43
+		"FILE 1920x1080 422 Planar 10 Bit 50i",				// M31_FILE_1920X1080_422_10_50i		// 44
+		"FILE 1920x1080 422 Planar 10 Bit 50p",				// M31_FILE_1920X1080_422_10_50p		// 45
+		"FILE 1920x1080 422 Planar 10 Bit 59.94i",			// M31_FILE_1920X1080_422_10_5994i		// 46
+		"FILE 1920x1080 422 Planar 10 Bit 59.94p",			// M31_FILE_1920X1080_422_10_5994p		// 47
+		"FILE 1920x1080 422 Planar 10 Bit 60i",				// M31_FILE_1920X1080_422_10_60i		// 48
+		"FILE 1920x1080 422 Planar 10 Bit 60p",				// M31_FILE_1920X1080_422_10_60p		// 49
 
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1920X1080_420_8_2398p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1920X1080_420_8_24p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1920X1080_420_8_25p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1920X1080_420_8_2997p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1920X1080_420_8_30p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1920X1080_420_8_50i);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1920X1080_420_8_50p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1920X1080_420_8_5994i);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1920X1080_420_8_5994p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1920X1080_420_8_60i);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1920X1080_420_8_60p);
+		"FILE 2048x1080 420 Planar 8 Bit 2398p",			// M31_FILE_2048X1080_420_8_2398p		// 50
+		"FILE 2048x1080 420 Planar 8 Bit 24p",				// M31_FILE_2048X1080_420_8_24p			// 51
+		"FILE 2048x1080 420 Planar 8 Bit 25p",				// M31_FILE_2048X1080_420_8_25p			// 52
+		"FILE 2048x1080 420 Planar 8 Bit 29.97p",			// M31_FILE_2048X1080_420_8_2997p		// 53
+		"FILE 2048x1080 420 Planar 8 Bit 30p",				// M31_FILE_2048X1080_420_8_30p			// 54
+		"FILE 2048x1080 420 Planar 8 Bit 50p",				// M31_FILE_2048X1080_420_8_50p			// 55
+		"FILE 2048x1080 420 Planar 8 Bit 59.94p",			// M31_FILE_2048X1080_420_8_5994p		// 56
+		"FILE 2048x1080 420 Planar 8 Bit 60p",				// M31_FILE_2048X1080_420_8_60p			// 57
+	
+		"FILE 2048x1080 422 Planar 10 Bit 2398p",			// M31_FILE_2048X1080_422_10_2398p		// 58
+		"FILE 2048x1080 422 Planar 10 Bit 24p",				// M31_FILE_2048X1080_422_10_24p		// 59
+		"FILE 2048x1080 422 Planar 10 Bit 25p",				// M31_FILE_2048X1080_422_10_25p		// 60
+		"FILE 2048x1080 422 Planar 10 Bit 29.97p",			// M31_FILE_2048X1080_422_10_2997p		// 61
+		"FILE 2048x1080 422 Planar 10 Bit 30p",				// M31_FILE_2048X1080_422_10_30p		// 62
+		"FILE 2048x1080 422 Planar 10 Bit 50p",				// M31_FILE_2048X1080_422_10_50p		// 63
+		"FILE 2048x1080 422 Planar 10 Bit 59.94p",			// M31_FILE_2048X1080_422_10_5994p		// 64
+		"FILE 2048x1080 422 Planar 10 Bit 60p",				// M31_FILE_2048X1080_422_10_60p		// 65
 
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1920X1080_422_10_2398p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1920X1080_422_10_24p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1920X1080_422_10_25p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1920X1080_422_10_2997p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1920X1080_422_10_30p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1920X1080_422_10_50i);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1920X1080_422_10_50p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1920X1080_422_10_5994i);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1920X1080_422_10_5994p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1920X1080_422_10_60i);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1920X1080_422_10_60p);
+		"FILE 3840x2160 420 Planar 8 Bit 2398p",			// M31_FILE_3840X2160_420_8_2398p		// 66
+		"FILE 3840x2160 420 Planar 8 Bit 24p",				// M31_FILE_3840X2160_420_8_24p			// 67
+		"FILE 3840x2160 420 Planar 8 Bit 25p",				// M31_FILE_3840X2160_420_8_25p			// 68
+		"FILE 3840x2160 420 Planar 8 Bit 29.97p",			// M31_FILE_3840X2160_420_8_2997p		// 69
+		"FILE 3840x2160 420 Planar 8 Bit 30p",				// M31_FILE_3840X2160_420_8_30p			// 70
+		"FILE 3840x2160 420 Planar 8 Bit 50p",				// M31_FILE_3840X2160_420_8_50p			// 71
+		"FILE 3840x2160 420 Planar 8 Bit 59.94p",			// M31_FILE_3840X2160_420_8_5994p		// 72
+		"FILE 3840x2160 420 Planar 8 Bit 60p",				// M31_FILE_3840X2160_420_8_60p			// 73
 
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_2048X1080_420_8_2398p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_2048X1080_420_8_24p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_2048X1080_420_8_25p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_2048X1080_420_8_2997p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_2048X1080_420_8_30p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_2048X1080_420_8_50p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_2048X1080_420_8_5994p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_2048X1080_420_8_60p);
+		"FILE 3840x2160 420 Planar 10 Bit 50p",				// M31_FILE_3840X2160_420_10_50p		// 74
+		"FILE 3840x2160 420 Planar 10 Bit 59.94p",			// M31_FILE_3840X2160_420_10_5994p		// 75
+		"FILE 3840x2160 420 Planar 10 Bit 60p",				// M31_FILE_3840X2160_420_10_60p		// 76
+  
+		"FILE 3840x2160 422 Planar 8 Bit 2398p",			// M31_FILE_3840X2160_422_8_2398p		// 77
+		"FILE 3840x2160 422 Planar 8 Bit 24p",				// M31_FILE_3840X2160_422_8_24p			// 78
+		"FILE 3840x2160 422 Planar 8 Bit 25p",				// M31_FILE_3840X2160_422_8_25p			// 79
+		"FILE 3840x2160 422 Planar 8 Bit 29.97p",			// M31_FILE_3840X2160_422_8_2997p		// 80
+		"FILE 3840x2160 422 Planar 8 Bit 30p",				// M31_FILE_3840X2160_422_8_30p			// 81
+		"FILE 3840x2160 422 Planar 8 Bit 50p",				// M31_FILE_3840X2160_422_8_60p			// 82
+		"FILE 3840x2160 422 Planar 8 Bit 59.94p",			// M31_FILE_3840X2160_422_8_5994p		// 83
+		"FILE 3840x2160 422 Planar 8 Bit 60p",				// M31_FILE_3840X2160_422_8_60p			// 84
+	
+		"FILE 3840x2160 422 Planar 10 Bit 2398p",			// M31_FILE_3840X2160_422_10_2398p		// 85
+		"FILE 3840x2160 422 Planar 10 Bit 24p",				// M31_FILE_3840X2160_422_10_24p		// 86
+		"FILE 3840x2160 422 Planar 10 Bit 25p",				// M31_FILE_3840X2160_422_10_25p		// 87
+		"FILE 3840x2160 422 Planar 10 Bit 29.97p",			// M31_FILE_3840X2160_422_10_2997p		// 88
+		"FILE 3840x2160 422 Planar 10 Bit 30p",				// M31_FILE_3840X2160_422_10_30p		// 89
+		"FILE 3840x2160 422 Planar 10 Bit 50p",				// M31_FILE_3840X2160_422_10_50p		// 90
+		"FILE 3840x2160 422 Planar 10 Bit 59.94p",			// M31_FILE_3840X2160_422_10_5994p		// 91
+		"FILE 3840x2160 422 Planar 10 Bit 60p",				// M31_FILE_3840X2160_422_10_60p		// 92
+	
+		"FILE 4096x2160 420 Planar 10 Bit 5994p",			// M31_FILE_4096X2160_420_10_5994p,		// 93
+		"FILE 4096x2160 420 Planar 10 Bit 60p",				// M31_FILE_4096X2160_420_10_60p,		// 94
+		"FILE 4096x2160 422 Planar 10 Bit 50p",				// M31_FILE_4096X2160_422_10_50p,		// 95
+		"FILE 4096x2160 422 Planar 10 Bit 5994p IOnly",		// M31_FILE_4096X2160_422_10_5994p_IF,	// 96
+		"FILE 4096x2160 422 Planar 10 Bit 60p IOnly",		// M31_FILE_4096X2160_422_10_60p_IF,	// 97
+	
+		"VIF 720x480 420 Planar 8 Bit 59.94i",				// M31_VIF_720X480_420_8_5994i			// 98
+		"VIF 720x480 420 Planar 8 Bit 59.94p",				// M31_VIF_720X480_420_8_5994p			// 99
+		"VIF 720x480 420 Planar 8 Bit 60i",					// M31_VIF_720X480_420_8_60i			// 100
+		"VIF 720x480 420 Planar 8 Bit 60p",					// M31_VIF_720X480_420_8_60p			// 101
+		"VIF 720x480 422 Planar 10 Bit 59.94i",				// M31_VIF_720X480_422_10_5994i			// 102
+		"VIF 720x480 422 Planar 10 Bit 59.94p",				// M31_VIF_720X480_422_10_5994p			// 103
+		"VIF 720x480 422 Planar 10 Bit 60i",				// M31_VIF_720X480_422_10_60i			// 104
+		"VIF 720x480 422 Planar 10 Bit 60p",				// M31_VIF_720X480_422_10_60p			// 105
 
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_2048X1080_422_10_2398p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_2048X1080_422_10_24p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_2048X1080_422_10_25p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_2048X1080_422_10_2997p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_2048X1080_422_10_30p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_2048X1080_422_10_50p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_2048X1080_422_10_5994p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_2048X1080_422_10_60p);
+		"VIF 720x576 420 Planar 8 Bit 50i",					// M31_VIF_720X576_420_8_50i			// 106
+		"VIF 720x576 420 Planar 8 Bit 50p",					// M31_VIF_720X576_420_8_50p			// 107
+		"VIF 720x576 422 Planar 10 Bit 50i",				// M31_VIF_720X576_422_10_50i			// 108
+		"VIF 720x576 422 Planar 10 Bit 50p",				// M31_VIF_720X576_422_10_50p			// 109
 
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_3840X2160_420_8_2398p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_3840X2160_420_8_24p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_3840X2160_420_8_25p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_3840X2160_420_8_2997p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_3840X2160_420_8_30p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_3840X2160_420_8_50p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_3840X2160_420_8_5994p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_3840X2160_420_8_60p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_3840X2160_420_10_50p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_3840X2160_420_10_5994p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_3840X2160_420_10_60p);
+		"VIF 1280x720 420 Planar 8 Bit 50p",				// M31_VIF_1280X720_420_8_50p			// 110
+		"VIF 1280x720 420 Planar 8 Bit 59.94p",				// M31_VIF_1280X720_420_8_5994p			// 111
+		"VIF 1280x720 420 Planar 8 Bit 60p",				// M31_VIF_1280X720_420_8_60p			// 112
+		"VIF 1280x720 422 Planar 10 Bit 50p",				// M31_VIF_1280X720_422_10_50p			// 113
+		"VIF 1280x720 422 Planar 10 Bit 59.94p",			// M31_VIF_1280X720_422_10_5994p		// 114
+		"VIF 1280x720 422 Planar 10 Bit 60p",				// M31_VIF_1280X720_422_10_60p			// 115
 
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_3840X2160_422_8_2398p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_3840X2160_422_8_24p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_3840X2160_422_8_25p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_3840X2160_422_8_2997p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_3840X2160_422_8_30p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_3840X2160_422_8_50p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_3840X2160_422_8_5994p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_3840X2160_422_8_60p);
+		"VIF 1920x1080 420 Planar 8 Bit 50i",				// M31_VIF_1920X1080_420_8_50i			// 116
+		"VIF 1920x1080 420 Planar 8 Bit 50p",				// M31_VIF_1920X1080_420_8_50p			// 117
+		"VIF 1920x1080 420 Planar 8 Bit 59.94i",			// M31_VIF_1920X1080_420_8_5994i		// 118
+		"VIF 1920x1080 420 Planar 8 Bit 59.94p",			// M31_VIF_1920X1080_420_8_5994p		// 119
+		"VIF 1920x1080 420 Planar 8 Bit 60i",				// M31_VIF_1920X1080_420_8_60i			// 120
+		"VIF 1920x1080 420 Planar 8 Bit 60p",				// M31_VIF_1920X1080_420_8_60p			// 121
+		"VIF 1920x1080 420 Planar 10 Bit 50i",				// M31_VIF_1920X1080_420_10_50i			// 122
+		"VIF 1920x1080 420 Planar 10 Bit 50p",				// M31_VIF_1920X1080_420_10_50p			// 123
+		"VIF 1920x1080 420 Planar 10 Bit 59.94i",			// M31_VIF_1920X1080_420_10_5994i		// 124
+		"VIF 1920x1080 420 Planar 10 Bit 59.94p",			// M31_VIF_1920X1080_420_10_5994p		// 125
+		"VIF 1920x1080 420 Planar 10 Bit 60i",				// M31_VIF_1920X1080_420_10_60i			// 126
+		"VIF 1920x1080 420 Planar 10 Bit 60p",				// M31_VIF_1920X1080_420_10_60p			// 127
+		"VIF 1920x1080 422 Planar 10 Bit 59.94i",			// M31_VIF_1920X1080_422_10_5994i		// 128
+		"VIF 1920x1080 422 Planar 10 Bit 59.94p",			// M31_VIF_1920X1080_422_10_5994p		// 129
+		"VIF 1920x1080 422 Planar 10 Bit 60i",				// M31_VIF_1920X1080_422_10_60i			// 130
+		"VIF 1920x1080 422 Planar 10 Bit 60p",				// M31_VIF_1920X1080_422_10_60p			// 131
+  
+		"VIF 3840x2160 420 Planar 8 Bit 30p",				// M31_VIF_3840X2160_420_8_30p			// 132
+		"VIF 3840x2160 420 Planar 8 Bit 50p",				// M31_VIF_3840X2160_420_8_50p			// 133
+		"VIF 3840x2160 420 Planar 8 Bit 59.94p",			// M31_VIF_3840X2160_420_8_5994p		// 134
+		"VIF 3840x2160 420 Planar 8 Bit 60p",				// M31_VIF_3840X2160_420_8_5994p		// 135
+		"VIF 3840x2160 420 Planar 10 Bit 50p",				// M31_VIF_3840X2160_420_8_60p			// 136
+		"VIF 3840x2160 420 Planar 10 Bit 59.94p",			// M31_VIF_3840X2160_420_8_60p			// 137
+		"VIF 3840x2160 420 Planar 10 Bit 60p",				// M31_VIF_3840X2160_420_10_5994p		// 138
+	
+		"VIF 3840x2160 422 Planar 10 Bit 30p",				// M31_VIF_3840X2160_422_10_30p			// 139
+		"VIF 3840x2160 422 Planar 10 Bit 50p",				// M31_VIF_3840X2160_422_10_50p			// 140
+		"VIF 3840x2160 422 Planar 10 Bit 59.94p",			// M31_VIF_3840X2160_422_10_5994p		// 141
+		"VIF 3840x2160 422 Planar 10 Bit 60p",				// M31_VIF_3840X2160_422_10_60p			// 142
+	};
 
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_3840X2160_422_10_2398p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_3840X2160_422_10_24p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_3840X2160_422_10_25p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_3840X2160_422_10_2997p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_3840X2160_422_10_30p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_3840X2160_422_10_50p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_3840X2160_422_10_5994p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_3840X2160_422_10_60p);
+	string NTV2M31VideoPresetToString (const M31VideoPreset inValue, const bool inForRetailDisplay)
+	{
+		if (inForRetailDisplay)
+			return m31Presets [inValue];	//	frameBufferFormatString (inValue);
+	
+		switch (inValue)
+		{
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_720X480_420_8_5994i);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_720X480_420_8_5994p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_720X480_420_8_60i);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_720X480_420_8_60p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_720X480_422_10_5994i);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_720X480_422_10_5994p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_720X480_422_10_60i);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_720X480_422_10_60p);
 
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_4096X2160_420_10_5994p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_4096X2160_420_10_60p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_4096X2160_422_10_50p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_4096X2160_422_10_5994p_IF);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_4096X2160_422_10_60p_IF);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_720X576_420_8_50i);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_720X576_420_8_50p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_720X576_422_10_50i);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_720X576_422_10_50p);
 
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_720X480_420_8_5994i);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_720X480_420_8_5994p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_720X480_420_8_60i);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_720X480_420_8_60p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_720X480_422_10_5994i);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_720X480_422_10_5994p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_720X480_422_10_60i);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_720X480_422_10_60p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1280X720_420_8_2398p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1280X720_420_8_24p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1280X720_420_8_25p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1280X720_420_8_2997p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1280X720_420_8_30p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1280X720_420_8_50p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1280X720_420_8_5994p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1280X720_420_8_60p);
 
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_720X576_420_8_50i);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_720X576_420_8_50p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_720X576_422_10_50i);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_720X576_422_10_50p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1280X720_422_10_2398p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1280X720_422_10_24p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1280X720_422_10_25p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1280X720_422_10_2997p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1280X720_422_10_30p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1280X720_422_10_50p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1280X720_422_10_5994p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1280X720_422_10_60p);
 
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_1280X720_420_8_50p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_1280X720_420_8_5994p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_1280X720_420_8_60p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_1280X720_422_10_50p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_1280X720_422_10_5994p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_1280X720_422_10_60p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1920X1080_420_8_2398p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1920X1080_420_8_24p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1920X1080_420_8_25p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1920X1080_420_8_2997p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1920X1080_420_8_30p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1920X1080_420_8_50i);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1920X1080_420_8_50p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1920X1080_420_8_5994i);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1920X1080_420_8_5994p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1920X1080_420_8_60i);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1920X1080_420_8_60p);
 
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_1920X1080_420_8_50i);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_1920X1080_420_8_50p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_1920X1080_420_8_5994i);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_1920X1080_420_8_5994p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_1920X1080_420_8_60i);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_1920X1080_420_8_60p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_1920X1080_420_10_50i);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_1920X1080_420_10_50p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_1920X1080_420_10_5994i);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_1920X1080_420_10_5994p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_1920X1080_420_10_60i);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_1920X1080_420_10_60p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_1920X1080_422_10_5994i);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_1920X1080_422_10_5994p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_1920X1080_422_10_60i);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_1920X1080_422_10_60p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1920X1080_422_10_2398p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1920X1080_422_10_24p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1920X1080_422_10_25p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1920X1080_422_10_2997p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1920X1080_422_10_30p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1920X1080_422_10_50i);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1920X1080_422_10_50p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1920X1080_422_10_5994i);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1920X1080_422_10_5994p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1920X1080_422_10_60i);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_1920X1080_422_10_60p);
 
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_3840X2160_420_8_30p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_3840X2160_420_8_50p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_3840X2160_420_8_5994p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_3840X2160_420_8_60p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_3840X2160_420_10_50p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_3840X2160_420_10_5994p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_3840X2160_420_10_60p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_3840X2160_422_10_30p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_3840X2160_422_10_50p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_3840X2160_422_10_5994p);
-		NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_3840X2160_422_10_60p);
-		case M31_NUMVIDEOPRESETS:		return "";	//special case
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_2048X1080_420_8_2398p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_2048X1080_420_8_24p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_2048X1080_420_8_25p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_2048X1080_420_8_2997p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_2048X1080_420_8_30p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_2048X1080_420_8_50p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_2048X1080_420_8_5994p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_2048X1080_420_8_60p);
+
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_2048X1080_422_10_2398p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_2048X1080_422_10_24p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_2048X1080_422_10_25p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_2048X1080_422_10_2997p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_2048X1080_422_10_30p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_2048X1080_422_10_50p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_2048X1080_422_10_5994p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_2048X1080_422_10_60p);
+
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_3840X2160_420_8_2398p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_3840X2160_420_8_24p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_3840X2160_420_8_25p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_3840X2160_420_8_2997p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_3840X2160_420_8_30p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_3840X2160_420_8_50p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_3840X2160_420_8_5994p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_3840X2160_420_8_60p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_3840X2160_420_10_50p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_3840X2160_420_10_5994p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_3840X2160_420_10_60p);
+
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_3840X2160_422_8_2398p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_3840X2160_422_8_24p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_3840X2160_422_8_25p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_3840X2160_422_8_2997p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_3840X2160_422_8_30p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_3840X2160_422_8_50p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_3840X2160_422_8_5994p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_3840X2160_422_8_60p);
+
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_3840X2160_422_10_2398p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_3840X2160_422_10_24p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_3840X2160_422_10_25p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_3840X2160_422_10_2997p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_3840X2160_422_10_30p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_3840X2160_422_10_50p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_3840X2160_422_10_5994p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_3840X2160_422_10_60p);
+
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_4096X2160_420_10_5994p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_4096X2160_420_10_60p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_4096X2160_422_10_50p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_4096X2160_422_10_5994p_IF);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_FILE_4096X2160_422_10_60p_IF);
+
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_720X480_420_8_5994i);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_720X480_420_8_5994p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_720X480_420_8_60i);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_720X480_420_8_60p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_720X480_422_10_5994i);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_720X480_422_10_5994p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_720X480_422_10_60i);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_720X480_422_10_60p);
+
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_720X576_420_8_50i);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_720X576_420_8_50p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_720X576_422_10_50i);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_720X576_422_10_50p);
+
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_1280X720_420_8_50p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_1280X720_420_8_5994p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_1280X720_420_8_60p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_1280X720_422_10_50p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_1280X720_422_10_5994p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_1280X720_422_10_60p);
+
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_1920X1080_420_8_50i);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_1920X1080_420_8_50p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_1920X1080_420_8_5994i);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_1920X1080_420_8_5994p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_1920X1080_420_8_60i);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_1920X1080_420_8_60p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_1920X1080_420_10_50i);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_1920X1080_420_10_50p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_1920X1080_420_10_5994i);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_1920X1080_420_10_5994p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_1920X1080_420_10_60i);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_1920X1080_420_10_60p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_1920X1080_422_10_5994i);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_1920X1080_422_10_5994p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_1920X1080_422_10_60i);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_1920X1080_422_10_60p);
+
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_3840X2160_420_8_30p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_3840X2160_420_8_50p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_3840X2160_420_8_5994p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_3840X2160_420_8_60p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_3840X2160_420_10_50p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_3840X2160_420_10_5994p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_3840X2160_420_10_60p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_3840X2160_422_10_30p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_3840X2160_422_10_50p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_3840X2160_422_10_5994p);
+			NTV2UTILS_ENUM_CASE_RETURN_STR(M31_VIF_3840X2160_422_10_60p);
+			case M31_NUMVIDEOPRESETS:		return "";	//special case
+		}
+		return "";
 	}
-	return "";
-}
-
+#endif//!defined(NTV2_DEPRECATE_17_6)
 
 string NTV2FrameGeometryToString (const NTV2FrameGeometry inValue, const bool inForRetailDisplay)
 {
@@ -7521,6 +7634,8 @@ string NTV2GetBitfileName (const NTV2DeviceID inBoardID)
 	case DEVICE_ID_IOX3:						return "iox3.bit";
 	case DEVICE_ID_KONAX:						return "konax.bit";
 	case DEVICE_ID_KONAXM:						return "konaxm.bit";
+	case DEVICE_ID_CORVID44_GEN3:				return "corvid44gen3.bit";
+	case DEVICE_ID_CORVID88_GEN3:				return "corvid88gen3.bit";
 	default:									return "";
 	}
 	return "";
@@ -7573,25 +7688,40 @@ NTV2DeviceID NTV2GetDeviceIDFromBitfileName (const string & inBitfileName)
 }
 
 
-string NTV2GetFirmwareFolderPath (void)
+string NTV2GetFirmwareFolderPath (const bool inAddTrailingPathDelim)
 {
-	#if defined (AJAMac)
-		return "/Library/Application Support/AJA/Firmware";
-	#elif defined (MSWindows)
-		HKEY	hKey		(AJA_NULL);
-		DWORD	bufferSize	(1024);
-		char *	lpData		(new char [bufferSize]);
+	string fwPath;
+	AJASystemInfo info (AJA_SystemInfoMemoryUnit_Megabytes, AJA_SystemInfoSection_Path);
+	info.GetValue (AJA_SystemInfoTag_Path_Firmware, fwPath);
+	const char c (fwPath.empty() ? 0 : fwPath.at(fwPath.length()-1));
+	if (!inAddTrailingPathDelim)
+		if (c == '/' || c == '\\')
+			fwPath.erase(fwPath.length()-1, 1);	//	lop off trailing '/'
+	return fwPath;
+}
 
-		if (RegOpenKeyExA (HKEY_LOCAL_MACHINE, "Software\\AJA", NULL, KEY_READ, &hKey) == ERROR_SUCCESS
-			&& RegQueryValueExA (hKey, "firmwarePath", NULL, NULL, (LPBYTE) lpData, &bufferSize) == ERROR_SUCCESS)
-				return string (lpData);
-		RegCloseKey (hKey);
-		return "";
-	#elif defined (AJALinux)
-		return "/opt/aja/firmware";
-	#else
-		return "";
-	#endif
+string NTV2GetPluginsFolderPath (const bool inAddTrailingPathDelim)
+{
+	string fwPath;
+	AJASystemInfo info (AJA_SystemInfoMemoryUnit_Megabytes, AJA_SystemInfoSection_Path);
+	info.GetValue (AJA_SystemInfoTag_Path_NTV2Plugins, fwPath);
+	const char c (fwPath.empty() ? 0 : fwPath.at(fwPath.length()-1));
+	if (!inAddTrailingPathDelim)
+		if (c == '/' || c == '\\')
+			fwPath.erase(fwPath.length()-1, 1);	//	lop off trailing '/'
+	return fwPath;
+}
+
+string NTV2GetVDevFolderPath (const bool inAddTrailingPathDelim)
+{
+	string fwPath;
+	AJASystemInfo info (AJA_SystemInfoMemoryUnit_Megabytes, AJA_SystemInfoSection_Path);
+	info.GetValue (AJA_SystemInfoTag_Path_NTV2VirtualDevices, fwPath);
+	const char c (fwPath.empty() ? 0 : fwPath.at(fwPath.length()-1));
+	if (!inAddTrailingPathDelim)
+		if (c == '/' || c == '\\')
+			fwPath.erase(fwPath.length()-1, 1);	//	lop off trailing '/'
+	return fwPath;
 }
 
 
@@ -7606,7 +7736,9 @@ NTV2DeviceIDSet NTV2GetSupportedDevices (const NTV2DeviceKinds inKinds)
 														DEVICE_ID_CORVID44_8KMK,
 														DEVICE_ID_CORVID44_PLNR,
 														DEVICE_ID_CORVID44,
+														DEVICE_ID_CORVID44_GEN3,
 														DEVICE_ID_CORVID88,
+														DEVICE_ID_CORVID88_GEN3,
 														DEVICE_ID_CORVIDHBR,
 														DEVICE_ID_CORVIDHEVC,
 														DEVICE_ID_IO4K,
@@ -7667,6 +7799,8 @@ NTV2DeviceIDSet NTV2GetSupportedDevices (const NTV2DeviceKinds inKinds)
 														DEVICE_ID_SOJI_DIAGS,
 														DEVICE_ID_TTAP,
 														DEVICE_ID_TTAP_PRO,
+														DEVICE_ID_IP25_R,
+														DEVICE_ID_IP25_T,
 														DEVICE_ID_NOTFOUND	};
 	if (inKinds == NTV2_DEVICEKIND_NONE)
 		return NTV2DeviceIDSet();
@@ -7808,7 +7942,9 @@ string NTV2BitfileTypeToString (const NTV2BitfileType inValue, const bool inComp
 		NTV2UTILS_ENUM_CASE_RETURN_VAL_OR_ENUM_STR(inCompactDisplay,	"Kona4 Main",				NTV2_BITFILE_KONA4_MAIN);
 		NTV2UTILS_ENUM_CASE_RETURN_VAL_OR_ENUM_STR(inCompactDisplay,	"Kona4 UFC",				NTV2_BITFILE_KONA4UFC_MAIN);
 		NTV2UTILS_ENUM_CASE_RETURN_VAL_OR_ENUM_STR(inCompactDisplay,	"Corvid88 Main",			NTV2_BITFILE_CORVID88);
+		NTV2UTILS_ENUM_CASE_RETURN_VAL_OR_ENUM_STR(inCompactDisplay,	"Corvid88Gen3 Main",		NTV2_BITFILE_CORVID88_GEN3);
 		NTV2UTILS_ENUM_CASE_RETURN_VAL_OR_ENUM_STR(inCompactDisplay,	"Corvid44 Main",			NTV2_BITFILE_CORVID44);
+		NTV2UTILS_ENUM_CASE_RETURN_VAL_OR_ENUM_STR(inCompactDisplay,	"Corvid44Gen3 Main",		NTV2_BITFILE_CORVID44_GEN3);
 		NTV2UTILS_ENUM_CASE_RETURN_VAL_OR_ENUM_STR(inCompactDisplay,	"Corvid HEVC",				NTV2_BITFILE_CORVIDHEVC);
 		NTV2UTILS_ENUM_CASE_RETURN_VAL_OR_ENUM_STR(inCompactDisplay,	"KonaIP 2022",				NTV2_BITFILE_KONAIP_2022);
 		NTV2UTILS_ENUM_CASE_RETURN_VAL_OR_ENUM_STR(inCompactDisplay,	"KonaIP 4CH 2SFP",			NTV2_BITFILE_KONAIP_4CH_2SFP);
@@ -7865,99 +8001,36 @@ string NTV2BitfileTypeToString (const NTV2BitfileType inValue, const bool inComp
 	return "(bad bitfile type)";
 }
 
-bool convertHDRFloatToRegisterValues(const HDRFloatValues & inFloatValues, HDRRegValues & outRegisterValues)
+string NTV2DieTempScaleToString (const NTV2DieTempScale inValue, const bool inUseUTF8)
 {
-	if ((inFloatValues.greenPrimaryX < 0 || inFloatValues.greenPrimaryX > float(1.0)) ||
-		(inFloatValues.greenPrimaryY < 0 || inFloatValues.greenPrimaryY > float(1.0)) ||
-		(inFloatValues.bluePrimaryX < 0 || inFloatValues.bluePrimaryX > float(1.0)) ||
-		(inFloatValues.bluePrimaryY < 0 || inFloatValues.bluePrimaryY > float(1.0)) ||
-		(inFloatValues.redPrimaryX < 0 || inFloatValues.redPrimaryX > float(1.0)) ||
-		(inFloatValues.redPrimaryY < 0 || inFloatValues.redPrimaryY > float(1.0)) ||
-		(inFloatValues.whitePointX < 0 || inFloatValues.whitePointX > float(1.0)) ||
-		(inFloatValues.whitePointY < 0 || inFloatValues.whitePointY > float(1.0)) ||
-		(inFloatValues.minMasteringLuminance < 0 || inFloatValues.minMasteringLuminance > float(6.5535)))
-		return false;
-
-	outRegisterValues.greenPrimaryX = static_cast<uint16_t>(inFloatValues.greenPrimaryX / float(0.00002));
-	outRegisterValues.greenPrimaryY = static_cast<uint16_t>(inFloatValues.greenPrimaryY / float(0.00002));
-	outRegisterValues.bluePrimaryX = static_cast<uint16_t>(inFloatValues.bluePrimaryX / float(0.00002));
-	outRegisterValues.bluePrimaryY = static_cast<uint16_t>(inFloatValues.bluePrimaryY / float(0.00002));
-	outRegisterValues.redPrimaryX = static_cast<uint16_t>(inFloatValues.redPrimaryX / float(0.00002));
-	outRegisterValues.redPrimaryY = static_cast<uint16_t>(inFloatValues.redPrimaryY / float(0.00002));
-	outRegisterValues.whitePointX = static_cast<uint16_t>(inFloatValues.whitePointX / float(0.00002));
-	outRegisterValues.whitePointY = static_cast<uint16_t>(inFloatValues.whitePointY / float(0.00002));
-	outRegisterValues.minMasteringLuminance = static_cast<uint16_t>(inFloatValues.minMasteringLuminance / float(0.0001));
-	outRegisterValues.maxMasteringLuminance = inFloatValues.maxMasteringLuminance;
-	outRegisterValues.maxContentLightLevel = inFloatValues.maxContentLightLevel;
-	outRegisterValues.maxFrameAverageLightLevel = inFloatValues.maxFrameAverageLightLevel;
-	outRegisterValues.electroOpticalTransferFunction = inFloatValues.electroOpticalTransferFunction;
-	outRegisterValues.staticMetadataDescriptorID = inFloatValues.staticMetadataDescriptorID;
-	return true;
+	static const NTV2StringList sScalesUTF8	= {	"\xE2\x84\x83",	"\xE2\x84\x89",	"\xC2\xB0""K",	"\xC2\xB0""R"};
+	static const NTV2StringList sScales		= {	           "C",	           "F",	          "K",	          "R"};
+	if (size_t(inValue) < sScales.size())
+		return inUseUTF8 ? sScalesUTF8.at(inValue) : sScales.at(inValue);
+	return "";
 }
 
-bool convertHDRRegisterToFloatValues(const HDRRegValues & inRegisterValues, HDRFloatValues & outFloatValues)
-{
-	if ((inRegisterValues.greenPrimaryX > 0xC350) ||
-		(inRegisterValues.greenPrimaryY > 0xC350) ||
-		(inRegisterValues.bluePrimaryX > 0xC350) ||
-		(inRegisterValues.bluePrimaryY > 0xC350) ||
-		(inRegisterValues.redPrimaryX > 0xC350) ||
-		(inRegisterValues.redPrimaryY > 0xC350) ||
-		(inRegisterValues.whitePointX > 0xC350) ||
-		(inRegisterValues.whitePointY > 0xC350))
-		return false;
-	outFloatValues.greenPrimaryX = static_cast<float>(inRegisterValues.greenPrimaryX * 0.00002);
-	outFloatValues.greenPrimaryY = static_cast<float>(inRegisterValues.greenPrimaryY * 0.00002);
-	outFloatValues.bluePrimaryX = static_cast<float>(inRegisterValues.bluePrimaryX * 0.00002);
-	outFloatValues.bluePrimaryY = static_cast<float>(inRegisterValues.bluePrimaryY * 0.00002);
-	outFloatValues.redPrimaryX = static_cast<float>(inRegisterValues.redPrimaryX * 0.00002);
-	outFloatValues.redPrimaryY = static_cast<float>(inRegisterValues.redPrimaryY * 0.00002);
-	outFloatValues.whitePointX = static_cast<float>(inRegisterValues.whitePointX * 0.00002);
-	outFloatValues.whitePointY = static_cast<float>(inRegisterValues.whitePointY * 0.00002);
-	outFloatValues.minMasteringLuminance = static_cast<float>(inRegisterValues.minMasteringLuminance * 0.0001);
-	outFloatValues.maxMasteringLuminance = inRegisterValues.maxMasteringLuminance;
-	outFloatValues.maxContentLightLevel = inRegisterValues.maxContentLightLevel;
-	outFloatValues.maxFrameAverageLightLevel = inRegisterValues.maxFrameAverageLightLevel;
-	outFloatValues.electroOpticalTransferFunction = inRegisterValues.electroOpticalTransferFunction;
-	outFloatValues.staticMetadataDescriptorID = inRegisterValues.staticMetadataDescriptorID;
-	return true;
-}
+#if !defined(NTV2_DEPRECATE_17_6)
+	bool convertHDRFloatToRegisterValues (const HDRFloatValues & inFloatValues, HDRRegValues & outRegisterValues)
+	{
+		return inFloatValues.toRegValues(outRegisterValues);
+	}
 
-void setHDRDefaultsForBT2020(HDRRegValues & outRegisterValues)
-{
-	outRegisterValues.greenPrimaryX = 0x2134;
-	outRegisterValues.greenPrimaryY = 0x9BAA;
-	outRegisterValues.bluePrimaryX = 0x1996;
-	outRegisterValues.bluePrimaryY = 0x08FC;
-	outRegisterValues.redPrimaryX = 0x8A48;
-	outRegisterValues.redPrimaryY = 0x3908;
-	outRegisterValues.whitePointX = 0x3D13;
-	outRegisterValues.whitePointY = 0x4042;
-	outRegisterValues.maxMasteringLuminance = 0x2710;
-	outRegisterValues.minMasteringLuminance = 0x0032;
-	outRegisterValues.maxContentLightLevel = 0;
-	outRegisterValues.maxFrameAverageLightLevel = 0;
-	outRegisterValues.electroOpticalTransferFunction = 0x02;
-	outRegisterValues.staticMetadataDescriptorID = 0x00;
-}
+	bool convertHDRRegisterToFloatValues (const HDRRegValues & inRegisterValues, HDRFloatValues & outFloatValues)
+	{
+		return outFloatValues.setFromRegValues(inRegisterValues);
+	}
 
-void setHDRDefaultsForDCIP3(HDRRegValues & outRegisterValues)
-{
-	outRegisterValues.greenPrimaryX = 0x33C2;
-	outRegisterValues.greenPrimaryY = 0x86C4;
-	outRegisterValues.bluePrimaryX = 0x1D4C;
-	outRegisterValues.bluePrimaryY = 0x0BB8;
-	outRegisterValues.redPrimaryX = 0x84D0;
-	outRegisterValues.redPrimaryY = 0x3E80;
-	outRegisterValues.whitePointX = 0x3D13;
-	outRegisterValues.whitePointY = 0x4042;
-	outRegisterValues.maxMasteringLuminance = 0x02E8;
-	outRegisterValues.minMasteringLuminance = 0x0032;
-	outRegisterValues.maxContentLightLevel = 0;
-	outRegisterValues.maxFrameAverageLightLevel = 0;
-	outRegisterValues.electroOpticalTransferFunction = 0x02;
-	outRegisterValues.staticMetadataDescriptorID = 0x00;
-}
+	void setHDRDefaultsForBT2020 (HDRRegValues & outRegisterValues)
+	{
+		outRegisterValues.setBT2020();
+	}
+
+	void setHDRDefaultsForDCIP3(HDRRegValues & outRegisterValues)
+	{
+		outRegisterValues.setDCIP3();
+	}
+#endif	//	!defined(NTV2_DEPRECATE_17_6)
 
 
 ostream & operator << (ostream & inOutStr, const NTV2OutputCrosspointIDs & inList)

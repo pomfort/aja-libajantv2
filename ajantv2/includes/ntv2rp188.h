@@ -9,13 +9,8 @@
 #define __NTV2_RP188_
 
 #include <string>
-#include <sstream>
-
-#include "ajaexport.h"
-#include "ajatypes.h"
-#include "ntv2enums.h"
+#include <ostream>
 #include "ntv2publicinterface.h"
-
 
 
 #if defined(AJALinux)
@@ -64,7 +59,7 @@ public:
 						CRP188 (ULWord frames, const TimecodeFormat tcFormat = kTCFormat30fps);
 	virtual				~CRP188();
 	void				Init ();
-	bool				operator==( const CRP188& s);
+	bool				operator == (const CRP188& s) const;
 
 	// Setters
 	void				SetRP188 (ULWord ulFrms, ULWord ulSecs, ULWord ulMins, ULWord ulHrs,
@@ -137,12 +132,12 @@ public:
 	NTV2FrameRate		DefaultFrameRateForTimecodeFormat (TimecodeFormat format = kTCFormatUnknown) const;
 
 	// Modifiers
-	bool				InitBurnIn (NTV2FrameBufferFormat frameBufferFormat, NTV2FrameDimensions frameDimensions, LWord percentY = 0);
+	bool				InitBurnIn (NTV2FrameBufferFormat frameBufferFormat, NTV2FrameSize frameDimensions, LWord percentY = 0);
 	void				writeV210Pixel (char **pBytePtr, int x, int c, int y);
 	bool				BurnTC (char *pBaseVideoAddress, int rowBytes, TimecodeBurnMode burnMode, int64_t frameCount = kDefaultFrameCount, bool bDisplay60_50fpsAs30_25 = false);
 	void				CopyDigit (char *pDigit, int digitWidth, int digitHeight, char *pFrameBuff, int fbRowBytes);
 	std::string			GetTimeCodeString(bool bDisplay60_50fpsAs30_25 = false);
-	
+
 private:
 	void				ConvertTcStrToVal (void);	// converts _sHMSF to _ulVal
 	void				ConvertTcStrToReg (void);	// converts _sHMSF to _rp188

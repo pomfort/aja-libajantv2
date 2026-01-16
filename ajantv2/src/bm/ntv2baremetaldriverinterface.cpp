@@ -71,7 +71,7 @@ bool CNTV2BareMetalDriverInterface::OpenLocalPhysical (const UWord inDeviceIndex
     LDIFAIL("Invalid device index " << inDeviceIndex);
     return false;
   }
-	_boardNumber = inDeviceIndex;
+	setDeviceIndexNumber(inDeviceIndex);
 	const NTV2DeviceIDSet	legalDeviceIDs(::NTV2GetSupportedDevices());
 	if (!CNTV2DriverInterface::ReadRegister(kRegBoardID, _boardID))
 	{
@@ -82,7 +82,7 @@ bool CNTV2BareMetalDriverInterface::OpenLocalPhysical (const UWord inDeviceIndex
 			Close();
 			return false;
 		}
-		LDIDBG("Retry succeeded: ndx=" << _boardNumber << " hDev=" << _hDevice << " id=" << ::NTV2DeviceIDToString(_boardID));
+		LDIDBG("Retry succeeded: ndx=" << GetIndexNumber() << " hDev=" << _hDevice << " id=" << ::NTV2DeviceIDToString(_boardID));
 	}
 	if (legalDeviceIDs.find(_boardID) == legalDeviceIDs.end())
 	{
@@ -91,7 +91,7 @@ bool CNTV2BareMetalDriverInterface::OpenLocalPhysical (const UWord inDeviceIndex
 		return false;
 	}
 	_boardOpened = true;
-	LDIINFO ("Opened device, devID=" << HEX8(_boardID) << " ndx=" << DEC(_boardNumber));
+	LDIINFO ("Opened device, devID=" << HEX8(_boardID) << " ndx=" << DEC(GetIndexNumber()));
 	return true;
 }
 
@@ -108,7 +108,7 @@ bool CNTV2BareMetalDriverInterface::CloseLocalPhysical (void)
 	UnmapDMADriverBuffer();
 #endif	//	!defined(NTV2_DEPRECATE_16_0)
 
-	LDIINFO ("Closed deviceID=" << HEX8(_boardID) << " ndx=" << DEC(_boardNumber) << " hDev=" << _hDevice);
+	LDIINFO ("Closed deviceID=" << HEX8(_boardID) << " ndx=" << DEC(GetIndexNumber()) << " hDev=" << _hDevice);
 	if (_hDevice != INVALID_HANDLE_VALUE)
 		AJAFileIO::Close(int(_hDevice));
 	_hDevice = INVALID_HANDLE_VALUE;
@@ -1085,24 +1085,6 @@ bool CNTV2BareMetalDriverInterface::NTV2Message (NTV2_HEADER * pInMessage)
 	AJADebug::StatTimerStart(AJA_DebugStat_NTV2Message);
 	const int result (ioctl(int(_hDevice), IOCTL_AJANTV2_MESSAGE, pInMessage));
 	AJADebug::StatTimerStop(AJA_DebugStat_NTV2Message);
-	if (result)
-		{LDIFAIL("IOCTL_AJANTV2_MESSAGE failed");	return false;}
-#endif
-	return true;
-}
-
-bool CNTV2BareMetalDriverInterface::HevcSendMessage (HevcMessageHeader* pMessage)
-{
-#if 0
-	if (!pMessage)
-		return false;	//	NULL message pointer
-	if (_hDevice == INVALID_HANDLE_VALUE)
-		return false;
-	if (_hDevice == 0)
-		return false;
-	AJADebug::StatTimerStart(AJA_DebugStat_HEVCSendMessage);
-	const int result = ioctl(int(_hDevice), IOCTL_HEVC_MESSAGE, pMessage);
-	AJADebug::StatTimerStop(AJA_DebugStat_HEVCSendMessage);
 	if (result)
 		{LDIFAIL("IOCTL_AJANTV2_MESSAGE failed");	return false;}
 #endif

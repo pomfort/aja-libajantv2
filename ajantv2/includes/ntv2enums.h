@@ -27,8 +27,10 @@ typedef enum
 	DEVICE_ID_CORVID44_2X4K				= 0X10832402,	///< @brief See \ref corvid4412g
 	DEVICE_ID_CORVID44_8K				= 0X10832401,	///< @brief See \ref corvid4412g
 	DEVICE_ID_CORVID44_8KMK				= 0x10832400,	///< @brief See \ref corvid4412g
+	DEVICE_ID_CORVID44_GEN3				= 0x11059700,	///< @brief See \ref corvid44
 	DEVICE_ID_CORVID44_PLNR				= 0X10832403,	///< @brief See \ref corvid4412g
 	DEVICE_ID_CORVID88					= 0x10538200,	///< @brief See \ref corvid88
+	DEVICE_ID_CORVID88_GEN3				= 0x11056500,	///< @brief See \ref corvid44
 	DEVICE_ID_CORVIDHBR					= 0x10668200,	///< @brief See \ref corvidhbr
 	DEVICE_ID_CORVIDHEVC				= 0x10634500,	///< @brief See \ref corvidhevc
 	DEVICE_ID_IO4K						= 0x10478300,	///< @brief See \ref io4kquad
@@ -89,6 +91,9 @@ typedef enum
 	DEVICE_ID_SOJI_OE7					= 0x10922407,
 	DEVICE_ID_TTAP						= 0x10416000,	///< @brief See \ref ttap
 	DEVICE_ID_TTAP_PRO					= 0x10879000,	///< @brief See \ref ttappro
+	//Devices below this line do not have OEM SDK support
+	DEVICE_ID_IP25_R					= 0x11033300,
+	DEVICE_ID_IP25_T					= 0x11033310,
 	DEVICE_ID_NOTFOUND					= 0xFFFFFFFF,	///< @brief Invalid or "not found"
 	DEVICE_ID_INVALID					= DEVICE_ID_NOTFOUND
 
@@ -144,7 +149,9 @@ typedef enum
 													||	(__d__) == DEVICE_ID_KONAIP_1RX_1TX_2110	\
 													||	(__d__) == DEVICE_ID_IOIP_2110				\
 													||	(__d__) == DEVICE_ID_IOIP_2110_RGB12		\
-													||	(__d__) == DEVICE_ID_KONAIP_25G)
+													||	(__d__) == DEVICE_ID_KONAIP_25G				\
+													||	(__d__) == DEVICE_ID_IP25_R           \
+                          ||  (__d__) == DEVICE_ID_IP25_T  )
 
 #define NTV2_DEVICE_SUPPORTS_SMPTE2022(__d__)	(		(__d__) == DEVICE_ID_KONAIP_2022			\
 													||	(__d__) == DEVICE_ID_IOIP_2022	)
@@ -205,7 +212,7 @@ typedef enum
 
 
 /**
-	@brief	Identifies a particular video frame buffer format. See \ref devicefbformats for details.
+	@brief	Identifies a particular video frame buffer pixel format. See \ref devicefbformats for details.
 **/
 typedef enum
 {
@@ -248,7 +255,7 @@ typedef enum
 	,NTV2_FBF_INVALID				= NTV2_FBF_NUMFRAMEBUFFERFORMATS
 } NTV2FrameBufferFormat;
 
-typedef NTV2FrameBufferFormat	NTV2PixelFormat;	///< @brief An alias for NTV2FrameBufferFormat.
+typedef NTV2FrameBufferFormat	NTV2PixelFormat;	///< @brief An alias for ::NTV2FrameBufferFormat.
 
 
 #define NTV2_IS_VALID_FRAME_BUFFER_FORMAT(__s__)	((__s__) >= NTV2_FBF_10BIT_YCBCR  &&  (__s__) < NTV2_FBF_NUMFRAMEBUFFERFORMATS)
@@ -1291,7 +1298,12 @@ typedef enum
 		NTV2_INPUTSOURCES_ANALOG	= NTV2_IOKINDS_ANALOG,
 		NTV2_INPUTSOURCES_NONE		= NTV2_IOKINDS_NONE
 	#endif	//	!defined(NTV2_DEPRECATE_16_3)
-} NTV2InputSourceKind, NTV2OutputDestKind, NTV2IOKind;
+} NTV2IOKind;
+
+#if !defined(NTV2_DEPRECATE_18_0)
+	typedef NTV2IOKind	NTV2InputSourceKind;	///< @deprecated	Use NTV2IOKind instead.
+	typedef NTV2IOKind	NTV2OutputDestKind;		///< @deprecated	Use NTV2IOKind instead.
+#endif	//	!defined(NTV2_DEPRECATE_18_0)
 
 typedef ULWord NTV2InputSourceKinds, NTV2OutputDestKinds, NTV2IOKinds;
 
@@ -2996,16 +3008,28 @@ typedef enum
 	,NTV2_Wgt12GSDIIn2
 	,NTV2_Wgt12GSDIIn3
 	,NTV2_Wgt12GSDIIn4
+	,NTV2_Wgt12GSDIIn5
+	,NTV2_Wgt12GSDIIn6
+	,NTV2_Wgt12GSDIIn7
+	,NTV2_Wgt12GSDIIn8
 	,NTV2_Wgt12GSDIOut1
 	,NTV2_Wgt12GSDIOut2
 	,NTV2_Wgt12GSDIOut3
 	,NTV2_Wgt12GSDIOut4
+	,NTV2_Wgt12GSDIOut5
+	,NTV2_Wgt12GSDIOut6
+	,NTV2_Wgt12GSDIOut7
+	,NTV2_Wgt12GSDIOut8
 	,NTV2_WgtHDMIIn1v4
 	,NTV2_WgtHDMIIn2v4
 	,NTV2_WgtHDMIIn3v4
 	,NTV2_WgtHDMIIn4v4
 	,NTV2_WgtHDMIOut1v4
 	,NTV2_WgtHDMIOut1v5
+	,NTV2_WgtHDMIOut1v6
+	,NTV2_WgtHDMIOut2v6
+	,NTV2_WgtHDMIOut3v6
+	,NTV2_WgtHDMIOut4v6
 	,NTV2_WgtMultiLinkOut1
 	,NTV2_Wgt3DLUT1
 	,NTV2_WgtMultiLinkOut2
@@ -3054,6 +3078,7 @@ typedef enum {
 	,NTV2WidgetType_HDMIOutV3
 	,NTV2WidgetType_HDMIOutV4
 	,NTV2WidgetType_HDMIOutV5
+	,NTV2WidgetType_HDMIOutV6
 	,NTV2WidgetType_SMPTE425Mux
 	,NTV2WidgetType_SDIIn12G
 	,NTV2WidgetType_SDIOut12G
@@ -3410,6 +3435,8 @@ typedef enum
 	NTV2_BITFILE_KONAX				= 91,
 	NTV2_BITFILE_KONAXM				= 92,
     NTV2_BITFILE_KONAIP_25G			= 93,
+	NTV2_BITFILE_CORVID44_GEN3		= 94,
+	NTV2_BITFILE_CORVID88_GEN3		= 95,
 	NTV2_BITFILE_NUMBITFILETYPES
 } NTV2BitfileType;
 
@@ -4099,6 +4126,7 @@ typedef enum
 {
 	VPIDBitDepth_8				= 0x0,
 	VPIDBitDepth_10_Full		= 0x0,
+	VPIDBitDepth_10_Full_ST292  = 0x3,
 	VPIDBitDepth_10				= 0x1,
 	VPIDBitDepth_12				= 0x2,
 	VPIDBitDepth_12_Full		= 0x3

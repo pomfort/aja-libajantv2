@@ -155,7 +155,7 @@ static const struct format_data c_format_data[] =
     { ntv2_pixel_format_prores_dvcpro,           1,  1,  1,  1,  1,  ntv2_color_space_none,     ntv2_color_depth_none,    ntv2_frame_format_raw },
     { ntv2_pixel_format_prores_hdv,              1,  1,  1,  1,  1,  ntv2_color_space_none,     ntv2_color_depth_none,    ntv2_frame_format_raw },
     { ntv2_pixel_format_10bit_rgb_packed,        12, 15, 12, 15, 3,  ntv2_color_space_rgb444,   ntv2_color_depth_10bit,   ntv2_frame_format_packed },
-    { ntv2_pixel_format_10bit_argb,              1,  1,  1,  1,  4,  ntv2_color_space_rgb444,   ntv2_color_depth_10bit,   ntv2_frame_format_packed },
+    { ntv2_pixel_format_10bit_argb,              1,  5,  1,  5,  4,  ntv2_color_space_rgb444,   ntv2_color_depth_10bit,   ntv2_frame_format_packed },
     { ntv2_pixel_format_16bit_argb,              1,  8,  1,  8,  4,  ntv2_color_space_rgb444,   ntv2_color_depth_16bit,   ntv2_frame_format_packed },
     { ntv2_pixel_format_8bit_ycbcr_422pl3,       1,  1,  1,  1,  1,  ntv2_color_space_yuv422,   ntv2_color_depth_12bit,   ntv2_frame_format_3plane },
     { ntv2_pixel_format_10bit_raw_rgb,           1,  1,  1,  1,  1,  ntv2_color_space_rgb444,   ntv2_color_depth_10bit,   ntv2_frame_format_packed },
@@ -392,6 +392,14 @@ Ntv2Status ntv2_videoraster_update_global(struct ntv2_videoraster *ntv2_raster, 
 
 	NTV2_MSG_VIDEORASTER_STATE("%s: video raster update global  reg %d  value %08x", ntv2_raster->name, reg, value);
 
+    // check for frame store config changes
+    for (i = 0; i < ntv2_raster->num_widgets; i++)
+    {
+        if (has_config_changed(ntv2_raster, i))
+            update_format(ntv2_raster, i);
+    }
+
+    // check again just in case the frame size has changed
     for (i = 0; i < ntv2_raster->num_widgets; i++)
     {
         if (has_config_changed(ntv2_raster, i))
@@ -403,6 +411,8 @@ Ntv2Status ntv2_videoraster_update_global(struct ntv2_videoraster *ntv2_raster, 
 
 Ntv2Status ntv2_videoraster_update_channel(struct ntv2_videoraster *ntv2_raster, uint32_t index)
 {
+    uint32_t i;
+
 	if (ntv2_raster == NULL)
 		return NTV2_STATUS_SUCCESS;
 	if (!ntv2_raster->monitor_enable)
@@ -412,11 +422,19 @@ Ntv2Status ntv2_videoraster_update_channel(struct ntv2_videoraster *ntv2_raster,
 
 	NTV2_MSG_VIDEORASTER_STATE("%s: video raster update channel %d\n", ntv2_raster->name, index);
 
-	if (has_config_changed(ntv2_raster, index))
+    // check for changes in the target channel register
+    if (has_config_changed(ntv2_raster, index))
 	{
-		update_format(ntv2_raster, index);
-	}
-	
+        update_format(ntv2_raster, index);
+    }
+
+    // check all channels for a frame size change
+    for (i = 0; i < ntv2_raster->num_widgets; i++)
+    {
+        if (has_config_changed(ntv2_raster, i))
+            update_format(ntv2_raster, i);
+    }
+
 	return NTV2_STATUS_SUCCESS;
 }
 
@@ -555,6 +573,7 @@ Ntv2Status ntv2_videoraster_update_frame(struct ntv2_videoraster *ntv2_raster, u
     NTV2_MSG_VIDEORASTER_STATE("%s: chn %d  f1 address        %08x\n", ntv2_raster->name, index, field1_address);
     NTV2_MSG_VIDEORASTER_STATE("%s: chn %d  f2 address        %08x\n", ntv2_raster->name, index, field2_address);
     NTV2_MSG_VIDEORASTER_STATE("%s: chn %d  od address        %08x\n", ntv2_raster->name, index, oddline_address);
+    NTV2_MSG_VIDEORASTER_STATE("%s: chn %d  frame size        %08x\n", ntv2_raster->name, index, frame_size);
     NTV2_MSG_VIDEORASTER_STATE("%s: chn %d  invert            %d\n", ntv2_raster->name, index, (int)invert);
 
    	return NTV2_STATUS_SUCCESS;
@@ -626,10 +645,10 @@ static bool has_config_changed(struct ntv2_videoraster *ntv2_raster, uint32_t in
 
 static bool update_format(struct ntv2_videoraster *ntv2_raster, uint32_t index)
 {
-    uint32_t base = ntv2_raster->widget_base + index*ntv2_raster->widget_size;
-	uint32_t value = ntv2_regnum_read(ntv2_raster->system_context, base + ntv2_reg_videoraster_control);
+	uint32_t value = ntv2_reg_read(ntv2_raster->system_context, ntv2_reg_channel_control, index);
 
-	if (NTV2_FLD_GET(ntv2_fld_videoraster_control_disable_auto_update, value) != 0)
+	if ((NTV2_FLD_GET(ntv2_fld_channel_control_channel_disable, value) != 0) &&
+        (NTV2_FLD_GET(ntv2_fld_channel_control_vanc_shift, value) != 0))
 	{
 	    NTV2_MSG_VIDEORASTER_STATE("%s: chn %d auto update disabled\n", ntv2_raster->name, index);
 		return true;
@@ -859,6 +878,7 @@ static bool update_format_single(struct ntv2_videoraster *ntv2_raster, uint32_t 
     NTV2_MSG_VIDEORASTER_STATE("%s: chn %d  f1 address        %08x\n", ntv2_raster->name, index, field1_address);
     NTV2_MSG_VIDEORASTER_STATE("%s: chn %d  f2 address        %08x\n", ntv2_raster->name, index, field2_address);
     NTV2_MSG_VIDEORASTER_STATE("%s: chn %d  od address        %08x\n", ntv2_raster->name, index, oddline_address);
+    NTV2_MSG_VIDEORASTER_STATE("%s: chn %d  frame size        %08x\n", ntv2_raster->name, index, frame_size);
     NTV2_MSG_VIDEORASTER_STATE("%s: chn %d  invert            %d\n", ntv2_raster->name, index, (int)invert);
 
 	/* pixel dimensions (pixels) */
