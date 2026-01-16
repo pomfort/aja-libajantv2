@@ -8,6 +8,7 @@
 
 //	Includes
 #include "ntv2player4k.h"
+#include "pomfort_common.hpp"
 #include <signal.h>
 
 
@@ -65,6 +66,12 @@ int main (int argc, const char ** argv)
 	if (showVersion)
 		{cout << argv[0] << ", NTV2 SDK " << ::NTV2Version() << endl;  return 0;}
 
+	//	Playback directory (positional argument - optional)
+	string playbackDirectory;
+	const NTV2StringList & otherArgs(popt.otherArgs());
+	if (!otherArgs.empty())
+		playbackDirectory = otherArgs.front();
+
 	//	Device
 	const string deviceSpec (pDeviceSpec ? pDeviceSpec : "0");
 	if (!CNTV2DemoCommon::IsValidDevice(deviceSpec))
@@ -120,6 +127,21 @@ int main (int argc, const char ** argv)
 	config.fDoRGBOnWire		= doRGBOnWire	? true	: false;
 	config.fDoLinkGrouping	= doLinkGrping	? true	: false;
 	config.fNumAudioLinks	= UWord(numAudioLinks);
+
+	//	File playback mode - override video format and pixel format with captured settings
+	if (!playbackDirectory.empty())
+	{
+		config.fPlaybackDirectory = playbackDirectory;
+		NTV2VideoFormat capturedFormat = PomfortCommon::restoreVideoFormat(playbackDirectory);
+		if (NTV2_IS_VALID_VIDEO_FORMAT(capturedFormat))
+		{
+			config.fVideoFormat = capturedFormat;
+			cout << "Using captured video format: " << ::NTV2VideoFormatToString(capturedFormat) << endl;
+		}
+		//	Use 10-bit YUV for file playback (TODO: save/restore from captured metadata)
+		config.fPixelFormat = NTV2_FBF_10BIT_YCBCR;
+		cout << "Using pixel format: 10-bit YCbCr" << endl;
+	}
 
 	//	Instantiate and initialize the NTV2Player4K object...
 	NTV2Player4K player(config);

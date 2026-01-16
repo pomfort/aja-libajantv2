@@ -17,6 +17,7 @@
 
 using namespace std;
 
+#define USE_FILE_PLAYBACK 1		//	Enable file-based playback mode
 //#define NTV2_BUFFER_LOCKING		//	Define this to pre-lock video/audio buffers in kernel
 
 //	Convenience macros for EZ logging:
@@ -154,8 +155,8 @@ AJAStatus NTV2Player4K::Init (void)
 	if (!mConfig.fDoMultiFormat)
 	{
 		mDevice.GetEveryFrameServices(mSavedTaskMode);		//	Save the current task mode
-		if (!mDevice.AcquireStreamForApplication (kDemoAppSignature, int32_t(AJAProcess::GetPid())))
-			return AJA_STATUS_BUSY;		//	Device is in use by another app -- fail
+//		if (!mDevice.AcquireStreamForApplication (kDemoAppSignature, int32_t(AJAProcess::GetPid())))
+//			return AJA_STATUS_BUSY;		//	Device is in use by another app -- fail
 	}
 	mDevice.SetEveryFrameServices(NTV2_OEM_TASKS);			//	Set OEM service level
 
@@ -346,12 +347,33 @@ AJAStatus NTV2Player4K::SetUpHostBuffers (void)
 		mHostBuffers.push_back(NTV2FrameData());		//	Make a new NTV2FrameData...
 		NTV2FrameData & frameData(mHostBuffers.back());	//	...and get a reference to it
 
-		//	Don't allocate a page-aligned video buffer here.
-		//	Instead, the test pattern buffers are used (and re-used) in the consumer thread.
-		//	This saves a LOT of memory and time spent copying data with these large 4K/UHD rasters.
-		//	NOTE:	This differs substantially from the NTV2Player demo, which pre-allocates the ring of video buffers
-		//			here, then in its producer thread, copies a fresh, unmodified test pattern raster into the video
-		//			buffer, blits timecode into it, then transfers it to the hardware in its consumer thread.
+		//	For file playback, allocate video buffers since each frame has unique content.
+		//	For test pattern mode, video buffers are NOT allocated here (reuses test pattern buffers).
+		if (!mConfig.fPlaybackDirectory.empty())
+		{
+			//	File playback: must allocate video buffer for each frame
+			if (!frameData.fVideoBuffer.Allocate(mFormatDesc.GetVideoWriteSize(), BUFFER_PAGE_ALIGNED))
+			{
+				PLFAIL("Failed to allocate " << xHEX0N(mFormatDesc.GetVideoWriteSize(),8) << "-byte video buffer");
+				return AJA_STATUS_MEMORY;
+			}
+			#ifdef NTV2_BUFFER_LOCKING
+				mDevice.DMABufferLock(frameData.fVideoBuffer, /*alsoPreLockSGL*/true);
+			#endif
+
+			//	Allocate ancillary buffers for file playback
+			if (!frameData.fAncBuffer.Allocate(gAncMaxSizeBytes, BUFFER_PAGE_ALIGNED))
+			{
+				PLFAIL("Failed to allocate " << xHEX0N(gAncMaxSizeBytes,8) << "-byte anc buffer");
+				return AJA_STATUS_MEMORY;
+			}
+			if (!frameData.fAncBuffer2.Allocate(gAncMaxSizeBytes, BUFFER_PAGE_ALIGNED))
+			{
+				PLFAIL("Failed to allocate " << xHEX0N(gAncMaxSizeBytes,8) << "-byte anc2 buffer");
+				return AJA_STATUS_MEMORY;
+			}
+		}
+		//	else: test pattern mode - video buffer will be set to test pattern pointer in ProduceFrames
 
 		//	Allocate a page-aligned audio buffer (if transmitting audio)
 		if (mConfig.WithAudio())
@@ -1231,6 +1253,12 @@ void NTV2Player4K::ConsumeFrames (void)
 	mDevice.WaitForOutputVerticalInterrupt(mConfig.fOutputChannel, 4);	//	Let it stop
 	PLNOTE("Thread started");
 
+#if USE_FILE_PLAYBACK
+	//	Enable ancillary data output for file playback mode
+	if (!mConfig.fPlaybackDirectory.empty())
+		acOptions |= AUTOCIRCULATE_WITH_ANC;
+#endif
+
 	if (pPkt)
 	{	//	Allocate page-aligned host Anc buffer...
 		uint32_t hdrPktSize	(0);
@@ -1304,23 +1332,39 @@ void NTV2Player4K::ConsumeFrames (void)
 			if (!pFrameData)
 				{prodWaits++;  continue;}
 
-			//	Unlike in the NTV2Player demo, I now burn the current timecode into the test pattern buffer that was noted
-			//	earlier into this FrameData in my Producer thread.  This is done to avoid copying large 4K/UHD rasters.
-			const	NTV2FrameRate	ntv2FrameRate	(::GetNTV2FrameRateFromVideoFormat(mConfig.fVideoFormat));
-			const	TimecodeFormat	tcFormat		(CNTV2DemoCommon::NTV2FrameRate2TimecodeFormat(ntv2FrameRate));
-			const	CRP188			rp188Info		(mCurrentFrame++, 0, 0, 10, tcFormat);
-			NTV2_RP188				tcData;
-			string					timeCodeString;
-
-			rp188Info.GetRP188Reg (tcData);
-			rp188Info.GetRP188Str (timeCodeString);
-			mTCBurner.BurnTimeCode (pFrameData->fVideoBuffer, timeCodeString.c_str(), 80);
-
-			//	Transfer the timecode-burned frame (plus audio) to the device for playout...
+			//	Set up video and audio buffers for transfer
 			outputXfer.acVideoBuffer.Set (pFrameData->fVideoBuffer, pFrameData->fVideoBuffer);
 			outputXfer.acAudioBuffer.Set (pFrameData->fAudioBuffer, pFrameData->fNumAudioBytes);
-			outputXfer.SetOutputTimeCode (tcData, ::NTV2ChannelToTimecodeIndex(mConfig.fOutputChannel, /*LTC=*/false, /*F2=*/false));
-			outputXfer.SetOutputTimeCode (tcData, ::NTV2ChannelToTimecodeIndex(mConfig.fOutputChannel, /*LTC=*/true,  /*F2=*/false));
+
+#if USE_FILE_PLAYBACK
+			if (!mConfig.fPlaybackDirectory.empty())
+			{
+				//	File playback mode: use captured timecodes and ancillary data without modification
+				outputXfer.SetOutputTimeCodes(pFrameData->fTimecodes);
+
+				//	Include ancillary data from captured frames
+				if (pFrameData->AncBuffer() || pFrameData->AncBuffer2())
+					outputXfer.SetAncBuffers(pFrameData->AncBuffer(), pFrameData->AncBufferSize(),
+											 pFrameData->AncBuffer2(), pFrameData->AncBuffer2Size());
+			}
+			else
+#endif
+			{
+				//	Test pattern mode: burn timecode into the test pattern buffer
+				//	This is done to avoid copying large 4K/UHD rasters.
+				const	NTV2FrameRate	ntv2FrameRate	(::GetNTV2FrameRateFromVideoFormat(mConfig.fVideoFormat));
+				const	TimecodeFormat	tcFormat		(CNTV2DemoCommon::NTV2FrameRate2TimecodeFormat(ntv2FrameRate));
+				const	CRP188			rp188Info		(mCurrentFrame++, 0, 0, 10, tcFormat);
+				NTV2_RP188				tcData;
+				string					timeCodeString;
+
+				rp188Info.GetRP188Reg (tcData);
+				rp188Info.GetRP188Str (timeCodeString);
+				mTCBurner.BurnTimeCode (pFrameData->fVideoBuffer, timeCodeString.c_str(), 80);
+
+				outputXfer.SetOutputTimeCode (tcData, ::NTV2ChannelToTimecodeIndex(mConfig.fOutputChannel, /*LTC=*/false, /*F2=*/false));
+				outputXfer.SetOutputTimeCode (tcData, ::NTV2ChannelToTimecodeIndex(mConfig.fOutputChannel, /*LTC=*/true,  /*F2=*/false));
+			}
 
 			//	Perform the DMA transfer to the device...
 			if (mDevice.AutoCirculateTransfer (mConfig.fOutputChannel, outputXfer))
@@ -1375,13 +1419,52 @@ void NTV2Player4K::ProducerThreadStatic (AJAThread * pThread, void * pContext)		
 
 void NTV2Player4K::ProduceFrames (void)
 {
+#if USE_FILE_PLAYBACK
+	if (!mConfig.fPlaybackDirectory.empty())
+	{
+		//	File-based playback mode
+		PLNOTE("Thread started - FILE PLAYBACK MODE from: " << mConfig.fPlaybackDirectory);
+
+		//	Restore captured TC indexes
+		NTV2TCIndexes capturedTCIndexes = PomfortCommon::restoreTCIndexes(mConfig.fPlaybackDirectory);
+		if (!capturedTCIndexes.empty())
+		{
+			mTCIndexes = capturedTCIndexes;
+			PLNOTE("Using captured TC Indexes: " << mTCIndexes);
+		}
+
+		PomfortCommon::OpenFromFileFrameProducer fileProducer(mDevice, mConfig.fVideoFormat, mConfig.fPlaybackDirectory);
+		ULWord badTally(0);
+
+		while (!mGlobalQuit)
+		{
+			NTV2FrameData* pFrameData = mFrameDataRing.StartProduceNextBuffer();
+			if (!pFrameData)
+			{
+				badTally++;
+				AJATime::Sleep(10);
+				continue;
+			}
+
+			auto copyConsumer = std::make_shared<PomfortCommon::CopyFrameConsumer>(pFrameData);
+			fileProducer.consumeWhenFrameIsReady(copyConsumer);
+			RemapTimecodes(pFrameData);
+			mFrameDataRing.EndProduceNextBuffer();
+		}
+
+		PLNOTE("Thread completed - FILE PLAYBACK: " << DEC(badTally) << " buffer starvation events");
+		return;
+	}
+#endif
+
+	//	Test pattern generation mode (original code)
 	ULWord	freqNdx(0), testPatNdx(0), badTally(0);
 	double	timeOfLastSwitch	(0.0);
 
 	const AJATimeBase			timeBase	(CNTV2DemoCommon::GetAJAFrameRate(::GetNTV2FrameRateFromVideoFormat(mConfig.fVideoFormat)));
 	const NTV2TestPatternNames	tpNames		(NTV2TestPatternGen::getTestPatternNames());
 
-	PLNOTE("Thread started");
+	PLNOTE("Thread started - TEST PATTERN MODE");
 	while (!mGlobalQuit)
 	{
 		NTV2FrameData *	pFrameData (mFrameDataRing.StartProduceNextBuffer());
@@ -1420,6 +1503,35 @@ void NTV2Player4K::ProduceFrames (void)
 	PLNOTE("Thread completed: " << DEC(mCurrentFrame) << " frame(s) produced, " << DEC(badTally) << " failed");
 
 }	//	ProduceFrames
+
+
+void NTV2Player4K::RemapTimecodes (NTV2FrameData * pFrameData)
+{
+	if (mTCIndexes.empty() || pFrameData->fTimecodes.empty())
+		return;
+
+	//	Check if all configured TC indexes exist in loaded frame
+	bool allPresent = true;
+	for (const auto& tcIndex : mTCIndexes)
+	{
+		if (pFrameData->fTimecodes.find(tcIndex) == pFrameData->fTimecodes.end())
+		{
+			allPresent = false;
+			break;
+		}
+	}
+
+	if (allPresent)
+		return;  //	Already has correct TC indexes
+
+	//	Get first available timecode from loaded frame
+	NTV2_RP188 firstTC = pFrameData->fTimecodes.begin()->second;
+
+	//	Copy to all configured output TC indexes
+	for (const auto& tcIndex : mTCIndexes)
+		pFrameData->fTimecodes[tcIndex] = firstTC;
+
+}	//	RemapTimecodes
 
 
 uint32_t NTV2Player4K::AddTone (ULWord * audioBuffer)

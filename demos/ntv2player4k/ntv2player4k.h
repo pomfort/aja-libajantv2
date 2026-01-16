@@ -10,6 +10,7 @@
 #define _NTV2PLAYER4K_H
 
 #include "ntv2democommon.h"
+#include "pomfort_common.hpp"
 #include "ajabase/system/thread.h"
 #include "ajabase/common/timecodeburn.h"
 
@@ -64,6 +65,7 @@ class NTV2Player4K
 		virtual void		ConsumeFrames (void);			///< @brief	My consumer thread that repeatedly plays frames using AutoCirculate (until quit).
 		virtual void		StartProducerThread (void);		///< @brief	Starts my producer thread.
 		virtual void		ProduceFrames (void);			///< @brief	My producer thread that repeatedly produces video frames.
+		virtual void		RemapTimecodes (NTV2FrameData * pFrameData);	///< @brief	Remaps timecodes to match output TC indexes.
 
 		/**
 			@brief		Inserts audio tone (based on my current tone frequency) into the given audio buffer.
@@ -138,6 +140,7 @@ class NTV2Player4K
 		NTV2FrameDataArray	mHostBuffers;		///< @brief	My host buffers
 		FrameDataRingBuffer	mFrameDataRing;		///< @brief	AJACircularBuffer that controls frame data access by producer/consumer threads
 		NTV2Buffers			mTestPatRasters;	///< @brief	Pre-rendered test pattern rasters
+		NTV2TCIndexes		mTCIndexes;			///< @brief	Timecode indexes for output
 
 };	//	NTV2Player4K
 
