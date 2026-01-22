@@ -18,6 +18,11 @@ using namespace std;
 
 #define NTV2_BUFFER_LOCK
 
+//    Override NTV2_ANCSIZE_MAX for testing new HANC insertion feature
+#if defined(NTV2_ANCSIZE_MAX)
+    #undef NTV2_ANCSIZE_MAX
+#endif
+#define NTV2_ANCSIZE_MAX (256 * 1024)    //    Super Size Me!    0x40000
 
 //////////////////////////////////////////////////////////////////////////////////////	NTV2Capture4K IMPLEMENTATION
 
@@ -33,7 +38,8 @@ NTV2Capture4K::NTV2Capture4K (const CaptureConfig & inConfig)
 		mAVCircularBuffer	(),
 		mGlobalQuit			(false),
 		mACOptions			(AUTOCIRCULATE_WITH_RP188 | AUTOCIRCULATE_WITH_ANC),
-        mCaptureDirectory   (inConfig.fCaptureDirectory)
+        mCaptureDirectory   (inConfig.fCaptureDirectory),
+        mFrameConsumer      (nullptr)
 {
 }	//	constructor
 
@@ -60,6 +66,13 @@ void NTV2Capture4K::Quit (void)
 
 	while (mProducerThread.Active())
 		AJATime::Sleep(10);
+
+	//	Clean up frame consumer (removes incomplete frames)
+	if (mFrameConsumer)
+	{
+		delete mFrameConsumer;
+		mFrameConsumer = nullptr;
+	}
 
 	//	Restore some of the device's former state...
 	if (!mConfig.fDoMultiFormat)
@@ -229,6 +242,7 @@ AJAStatus NTV2Capture4K::SetupVideo (void)
 	//	Set the device video format to whatever was detected at the input(s)...
 	mDevice.SetVideoFormat (mVideoFormat, false, false, mConfig.fInputChannel);
 	mDevice.SetVANCMode (mActiveFrameStores, NTV2_VANCMODE_OFF);	//	Disable VANC
+    mDevice.AncSetFrameBufferSize (NTV2_ANCSIZE_MAX, NTV2_ANCSIZE_MAX);
 
 	//	Enable TSI/4K-specific frame modes when 4K mode is enabled
 	if (mConfig.fEnable4K)
@@ -469,8 +483,12 @@ void NTV2Capture4K::CaptureFrames (void)
 			if (acStatus.WithAudio())
 				inputXfer.SetAudioBuffer (frameData.AudioBuffer(), frameData.AudioBufferSize());
 			if (acStatus.WithCustomAnc())
+			{
+				frameData.fAncBuffer.Fill(0);
+				frameData.fAncBuffer2.Fill(0);
 				inputXfer.SetAncBuffers (frameData.AncBuffer(), frameData.AncBufferSize(),
 										frameData.AncBuffer2(), frameData.AncBuffer2Size());
+			}
 
 			//	Transfer video/audio/anc from the device into our host buffers...
 			mDevice.AutoCirculateTransfer (mConfig.fInputChannel, inputXfer);

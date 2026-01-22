@@ -17,10 +17,34 @@
 #include "ajabase/common/videotypes.h"
 #include "ajabase/common/timecode.h"
 #include "ajabase/common/timecodeburn.h"
+#include "ajabase/common/circularbuffer.h"
 #include "ajabase/system/thread.h"
 #include "ajabase/system/process.h"
 #include "ajabase/system/systemtime.h"
 #include <set>
+#include <memory>
+#include <string>
+
+//	Forward declarations
+namespace PomfortCommon {
+	class OpenFromFileFrameProducer;
+}
+
+/**
+	@brief	Extended configuration for file-based playback and 4K TSI mode.
+**/
+struct LLBurnConfig
+{
+	std::string		fPlaybackDirectory;		///< @brief	Directory for file-based playback (empty = burn pass-through mode)
+	bool			fEnable4K;				///< @brief	Enable 4K/UHD TSI mode (IO 4K Plus, hardcodes to channel 3)
+
+	LLBurnConfig() : fEnable4K(false) {}
+};
+
+//	Circular buffer size for producer/consumer threading in playback mode
+const size_t LLBURN_CIRCULAR_BUFFER_SIZE = 8;
+
+using FrameDataRingBuffer = AJACircularBuffer<NTV2FrameData*>;
 
 
 /**
@@ -37,8 +61,9 @@ class NTV2LLBurn
 			@brief	Constructs me using the given configuration settings.
 			@note	I'm not completely initialized and ready for use until after my Init method has been called.
 			@param[in]	inConfig		Specifies the configuration parameters.
+			@param[in]	inLLConfig		Specifies the extended configuration for file playback and 4K mode.
 		**/
-							NTV2LLBurn (const BurnConfig & inConfig);
+							NTV2LLBurn (const BurnConfig & inConfig, const LLBurnConfig & inLLConfig = LLBurnConfig());
 		virtual				~NTV2LLBurn ();
 
 		/**
@@ -112,6 +137,26 @@ class NTV2LLBurn
 		**/
 		virtual bool		AnalogLTCInputHasTimecode (void);
 
+		/**
+			@brief	Sets up 4K/UHD TSI routing for IO 4K Plus (channel 3 output).
+		**/
+		virtual bool		RouteTsiOutput (void);
+
+		/**
+			@brief	Starts the producer thread for loading frames from disk.
+		**/
+		virtual void		StartProducerThread (void);
+
+		/**
+			@brief	Producer thread function that pre-loads frames from disk into circular buffer.
+		**/
+		virtual void		ProduceFrames (void);
+
+		/**
+			@brief	Sets up host buffers for circular buffer playback mode.
+		**/
+		virtual AJAStatus	SetupPlaybackBuffers (void);
+
 
 	//	Protected Class Methods
 	protected:
@@ -124,10 +169,18 @@ class NTV2LLBurn
 		**/
 		static void	RunThreadStatic (AJAThread * pThread, void * pContext);
 
+		/**
+			@brief	This is the producer thread's static callback function.
+			@param[in]	pThread		A valid pointer to the producer thread's AJAThread instance.
+			@param[in]	pContext	Context information to pass to the thread.
+		**/
+		static void	ProducerThreadStatic (AJAThread * pThread, void * pContext);
+
 
 	//	Private Member Data
 	private:
 		BurnConfig			mConfig;				///< @brief	My configuration info
+		LLBurnConfig		mLLConfig;				///< @brief	Extended configuration for file playback and 4K
 		AJAThread			mRunThread;				///< @brief	My worker thread object
 		CNTV2Card			mDevice;				///< @brief	My CNTV2Card instance
 		NTV2DeviceID		mDeviceID;				///< @brief	Keep my device ID handy
@@ -156,6 +209,12 @@ class NTV2LLBurn
 		uint32_t			mInputEndFrame;		///< @brief The input ending frame to use
 		uint32_t			mOutputStartFrame;	///< @brief The output starting frame to use
 		uint32_t			mOutputEndFrame;	///< @brief The output ending frame to use
+
+		//	File playback members
+		std::unique_ptr<PomfortCommon::OpenFromFileFrameProducer>	mFileProducer;		///< @brief File-based frame producer
+		AJAThread			mProducerThread;			///< @brief Producer thread for loading frames
+		NTV2FrameDataArray	mHostBuffers;				///< @brief Host frame buffers (circular buffer)
+		FrameDataRingBuffer	mFrameDataRing;				///< @brief Circular buffer for producer/consumer
 
 };	//	NTV2LLBurn
 

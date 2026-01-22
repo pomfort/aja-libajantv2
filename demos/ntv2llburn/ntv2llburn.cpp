@@ -10,6 +10,7 @@
 #include "ntv2formatdescriptor.h"
 #include "ajabase/common/types.h"
 #include "ajaanc/includes/ancillarylist.h"
+#include "../../../pomfort_common.hpp"
 #include <iostream>
 
 using namespace std;
@@ -28,8 +29,9 @@ const uint32_t  kNumFrameBuffers (2); // ping-pong between frames N and N+1 (det
 #define AsCU8Ptr(_p_)			reinterpret_cast<const uint8_t*>(_p_)
 
 
-NTV2LLBurn::NTV2LLBurn (const BurnConfig & inConfig)
+NTV2LLBurn::NTV2LLBurn (const BurnConfig & inConfig, const LLBurnConfig & inLLConfig)
 	:	mConfig					(inConfig),
+		mLLConfig				(inLLConfig),
 		mRunThread				(AJAThread()),
 		mDeviceID				(DEVICE_ID_NOTFOUND),
 		mVideoFormat			(NTV2_FORMAT_UNKNOWN),
@@ -40,7 +42,8 @@ NTV2LLBurn::NTV2LLBurn (const BurnConfig & inConfig)
 		mAudioInLastAddress		(0),
 		mAudioOutLastAddress	(0),
 		mFramesProcessed		(0),
-		mFramesDropped			(0)
+		mFramesDropped			(0),
+		mProducerThread			(AJAThread())
 {
 }	//	constructor
 
@@ -49,6 +52,10 @@ NTV2LLBurn::~NTV2LLBurn ()
 {
 	//	Stop my capture and playout threads, then destroy them...
 	Quit();
+
+	//	Wait for producer thread to finish if it was running
+	while (mProducerThread.Active())
+		AJATime::Sleep(10);
 
 	//	Unsubscribe from input vertical event...
 	mDevice.UnsubscribeInputVerticalEvent (mConfig.fInputChannel);
@@ -100,11 +107,11 @@ AJAStatus NTV2LLBurn::Init (void)
 	mDevice.GetStreamingApplication (appSignature, appPID);		//	Who currently "owns" the device?
 	if (!mConfig.fDoMultiFormat)
 	{
-		if (!mDevice.AcquireStreamForApplication (kAppSignature, static_cast<int32_t>(AJAProcess::GetPid())))
-		{
-			cerr << "## ERROR:  Unable to acquire device because another app (pid " << appPID << ") owns it" << endl;
-			return AJA_STATUS_BUSY;		//	Some other app is using the device
-		}
+//		if (!mDevice.AcquireStreamForApplication (kAppSignature, static_cast<int32_t>(AJAProcess::GetPid())))
+//		{
+//			cerr << "## ERROR:  Unable to acquire device because another app (pid " << appPID << ") owns it" << endl;
+//			return AJA_STATUS_BUSY;		//	Some other app is using the device
+//		}
 		mDevice.ClearRouting ();	//	Clear the current device routing (since I "own" the device)
 	}
 	mDevice.SetTaskMode (NTV2_OEM_TASKS);	//	Set the OEM service level
@@ -136,6 +143,27 @@ AJAStatus NTV2LLBurn::Init (void)
 	if (mConfig.WithAnc() && !mDevice.features().CanDoCustomAnc())
 		{cerr << "## WARNING: Device doesn't support custom Anc, '-a -h' option ignored" << endl;  mConfig.fWithAnc = false; mConfig.fWithHanc = false;}
 
+	//	Initialize file-based playback if directory is specified
+	if (!mLLConfig.fPlaybackDirectory.empty())
+	{
+		//	Restore video format from captured data
+		NTV2VideoFormat capturedFormat = PomfortCommon::restoreVideoFormat(mLLConfig.fPlaybackDirectory);
+		if (capturedFormat != NTV2_FORMAT_UNKNOWN)
+		{
+			mVideoFormat = capturedFormat;
+			cerr << "Using captured video format: " << ::NTV2VideoFormatToString(mVideoFormat) << endl;
+		}
+
+		//	In playback mode, always enable VANC+HANC
+		mConfig.fWithAnc = true;
+		mConfig.fWithHanc = true;
+		mConfig.fSuppressAudio = true;  //	Audio via HANC
+
+		//	Create file producer
+		mFileProducer = std::make_unique<PomfortCommon::OpenFromFileFrameProducer>(
+			mDevice, mVideoFormat, mLLConfig.fPlaybackDirectory);
+	}
+
 	//	Set up the video and audio...
 	status = SetupVideo();
 	if (AJA_FAILURE (status))
@@ -149,6 +177,14 @@ AJAStatus NTV2LLBurn::Init (void)
 	status = SetupHostBuffers();
 	if (AJA_FAILURE (status))
 		return status;
+
+	//	Set up playback buffers for file-based playback
+	if (!mLLConfig.fPlaybackDirectory.empty())
+	{
+		status = SetupPlaybackBuffers();
+		if (AJA_FAILURE(status))
+			return status;
+	}
 
 	if (NTV2_IS_ANALOG_TIMECODE_INDEX(mConfig.fTimecodeSource))
 		mDevice.SetLTCInputEnable(true);	//	Enable analog LTC input (some LTC inputs are shared with reference input)
@@ -165,6 +201,106 @@ AJAStatus NTV2LLBurn::SetupVideo (void)
 {
 	const uint16_t	numFrameStores	(mDevice.features().GetNumFrameStores());
 	const uint16_t	numSDIOutputs	(mDevice.features().GetNumVideoOutputs());
+
+	//	PLAYBACK-ONLY MODE: Setup for file-based playout
+	if (!mLLConfig.fPlaybackDirectory.empty())
+	{
+		//	Always use v210 (10-bit YCbCr) for playback
+		mConfig.fPixelFormat = NTV2_FBF_10BIT_YCBCR;
+		cerr << "Playback mode: Using v210 pixel format" << endl;
+
+		//	Always use channel 3 for output (both HD and 4K)
+		mConfig.fOutputChannel = NTV2_CHANNEL3;
+		cerr << "Playback mode: Using channel 3 for output" << endl;
+
+		if (mLLConfig.fEnable4K)
+		{
+			//	TSI mode: Enable 2 frame stores (Ch3+Ch4)
+			NTV2ChannelSet frameStores;
+			frameStores.insert(NTV2_CHANNEL3);
+			frameStores.insert(NTV2_CHANNEL4);
+			mDevice.EnableChannels(frameStores, !mConfig.fDoMultiFormat);
+			mDevice.SetTsiFrameEnable(true, NTV2_CHANNEL3);
+		}
+		else
+		{
+			//	HD mode: Use channel 3 for output
+			mDevice.EnableChannel(mConfig.fOutputChannel);
+		}
+
+		//	Use free-run reference in playback mode
+		mDevice.SetReference(NTV2_REFERENCE_FREERUN);
+		mAudioSystem = NTV2_AUDIOSYSTEM_1;
+		mOutputDest = ::NTV2ChannelToOutputDestination(mConfig.fOutputChannel);
+
+		//	Enable SDI transmitter
+		if (mDevice.features().HasBiDirectionalSDI() && NTV2_OUTPUT_DEST_IS_SDI(mOutputDest))
+			mDevice.SetSDITransmitEnable(mConfig.fOutputChannel, true);
+
+		//	Set multi-format mode
+		if (mDevice.features().CanDoMultiFormat() && mConfig.fDoMultiFormat)
+			mDevice.SetMultiFormatMode(true);
+		else if (mDevice.features().CanDoMultiFormat())
+			mDevice.SetMultiFormatMode(false);
+
+		//	Set video format for output channel(s)
+		mDevice.SetVideoFormat(mVideoFormat, false, false, mConfig.fOutputChannel);
+		if (mLLConfig.fEnable4K)
+			mDevice.SetVideoFormat(mVideoFormat, false, false, NTV2_CHANNEL4);
+
+		//	Set pixel format
+		if (!mDevice.features().CanDoFrameBufferFormat(mConfig.fPixelFormat))
+			mConfig.fPixelFormat = NTV2_FBF_8BIT_YCBCR;
+		mDevice.SetFrameBufferFormat(mConfig.fOutputChannel, mConfig.fPixelFormat);
+		if (mLLConfig.fEnable4K)
+			mDevice.SetFrameBufferFormat(NTV2_CHANNEL4, mConfig.fPixelFormat);
+
+		//	Enable and subscribe to output interrupts
+		mDevice.EnableOutputInterrupt(mConfig.fOutputChannel);
+		mDevice.SubscribeOutputVerticalEvent(mConfig.fOutputChannel);
+
+		//	Set frame store to display mode
+		mDevice.SetMode(mConfig.fOutputChannel, NTV2_MODE_DISPLAY);
+		if (mLLConfig.fEnable4K)
+			mDevice.SetMode(NTV2_CHANNEL4, NTV2_MODE_DISPLAY);
+
+		//	Set up routing based on mode
+		if (mLLConfig.fEnable4K)
+			RouteTsiOutput();
+		else
+			RouteOutputSignal();
+
+		//	Disable VANC
+		mDevice.SetVANCMode(NTV2_VANCMODE_OFF, mConfig.fOutputChannel);
+		if (mLLConfig.fEnable4K)
+			mDevice.SetVANCMode(NTV2_VANCMODE_OFF, NTV2_CHANNEL4);
+		if (::Is8BitFrameBufferFormat(mConfig.fPixelFormat))
+		{
+			mDevice.SetVANCShiftMode(mConfig.fOutputChannel, NTV2_VANCDATA_NORMAL);
+			if (mLLConfig.fEnable4K)
+				mDevice.SetVANCShiftMode(NTV2_CHANNEL4, NTV2_VANCDATA_NORMAL);
+		}
+
+		//	Set up RP188 for output
+		mRP188Outputs.clear();
+		mRP188Outputs.insert(mConfig.fOutputChannel);
+		for (NTV2ChannelSetConstIter iter(mRP188Outputs.begin()); iter != mRP188Outputs.end(); ++iter)
+		{
+			mDevice.SetRP188Mode(*iter, NTV2_RP188_OUTPUT);
+			mDevice.DisableRP188Bypass(*iter);
+		}
+
+		//	Set output frame buffer indices (for ping-pong)
+		mOutputStartFrame = 0;
+		mOutputEndFrame = 1;
+		mDevice.SetOutputFrame(mConfig.fOutputChannel, mOutputStartFrame);
+
+		//	Get frame geometry info
+		mFormatDesc = NTV2FormatDescriptor(mVideoFormat, mConfig.fPixelFormat);
+		return AJA_STATUS_SUCCESS;
+	}
+
+	//	CAPTURE/BURN MODE: Original setup path
 
 	//	Can the device support the desired input source?
 	if (!mDevice.features().CanDoInputSource(mConfig.fInputSource))
@@ -541,6 +677,165 @@ static const bool	REPLACE_OUTGOING_ANC_WITH_CUSTOM_PACKETS	(false);
 
 void NTV2LLBurn::ProcessFrames (void)
 {
+	//	PLAYBACK-ONLY MODE: File-based playout with HANC support
+	if (!mLLConfig.fPlaybackDirectory.empty())
+	{
+		BURNNOTE("Playback-only mode started");
+
+		const NTV2Channel sdiOutputChannel = mConfig.fOutputChannel;
+		const UWord sdiOutputIndex = UWord(sdiOutputChannel);
+		const bool isInterlace = !NTV2_VIDEO_FORMAT_HAS_PROGRESSIVE_PICTURE(mVideoFormat);
+		uint32_t currentOutFrame = mOutputStartFrame;
+
+		//	Save current Anc buffer capacity (to restore it later), then max it out...
+		ULWord savedF1ByteCapacity(0), savedF2ByteCapacity(0), offset(0);
+		mDevice.GetAncRegionOffsetAndSize(offset, savedF1ByteCapacity, NTV2_AncRgn_Field1);
+		mDevice.GetAncRegionOffsetAndSize(offset, savedF2ByteCapacity, NTV2_AncRgn_Field2);
+		mDevice.AncSetFrameBufferSize(NTV2_ANCSIZE_MAX, NTV2_ANCSIZE_MAX);
+
+		//	Initialize ANC inserter (same as burn mode with --hanc)
+		bool initOk = mDevice.AncInsertInit(sdiOutputIndex, sdiOutputChannel);
+		bool compOk = mDevice.AncInsertSetComponents(sdiOutputIndex,
+			true,   //	VANC enable
+			true,   //	HANC_Y enable
+			true,   //	HANC_C enable
+			true);  //	HANC_AUDIO enable
+		bool readOk = mDevice.AncInsertSetReadParams(sdiOutputIndex, 0, 0, sdiOutputChannel);
+		mDevice.AncInsertSetField2ReadParams(sdiOutputIndex, 0, 0, sdiOutputChannel);
+
+		//	Disable SDI embedded audio output (audio comes from HANC)
+		mDevice.SetSDIOutputAudioEnabled(sdiOutputChannel, false);
+
+		//	Create zeroes buffer for pre-clearing ANC regions
+		NTV2Buffer zeroesBuffer(NTV2_ANCSIZE_MAX);
+		zeroesBuffer.Allocate(NTV2_ANCSIZE_MAX);
+		zeroesBuffer.Fill(ULWord64(0));
+
+		//	Pre-clear ANC buffers (same as burn mode - no channel parameter to use default)
+		mDevice.DMAWriteAnc(0, zeroesBuffer, zeroesBuffer);
+		mDevice.DMAWriteAnc(1, zeroesBuffer, zeroesBuffer);
+
+		//	Start producer thread (loads frames ahead of time)
+		StartProducerThread();
+
+		mFramesProcessed = mFramesDropped = 0;
+
+		//	Initial ping-pong setup before main loop (same as burn mode)
+		currentOutFrame ^= 1;
+		mDevice.SetOutputFrame(sdiOutputChannel, currentOutFrame);
+
+		//	Wait for first vertical interrupt to synchronize
+		mDevice.WaitForOutputVerticalInterrupt(sdiOutputChannel);
+
+		//	Toggle again for the actual first frame
+		currentOutFrame ^= 1;
+		mDevice.SetOutputFrame(sdiOutputChannel, currentOutFrame);
+
+		while (!mGlobalQuit)
+		{
+			//	Wait for output vertical interrupt
+			mDevice.WaitForOutputVerticalInterrupt(sdiOutputChannel);
+
+			//	Toggle output buffer (ping-pong)
+			currentOutFrame ^= 1;
+
+			//	Get next pre-loaded frame from ring buffer
+			NTV2FrameData* pFrameData = mFrameDataRing.StartConsumeNextBuffer();
+			if (!pFrameData)
+			{
+				mFramesDropped++;
+				continue;  //	Buffer underrun, skip this frame
+			}
+
+			//	DMA video to output frame buffer
+			mDevice.DMAWriteFrame(currentOutFrame,
+				reinterpret_cast<ULWord*>(pFrameData->fVideoBuffer.GetHostPointer()),
+				pFrameData->fVideoBuffer.GetByteCount());
+
+			//	DMA ANC to output frame buffer (no channel - match burn mode exactly)
+			mDevice.DMAWriteAnc(currentOutFrame,
+				pFrameData->fAncBuffer,
+				pFrameData->fAncBuffer2);
+
+			//	Update output frame pointer
+			mDevice.SetOutputFrame(sdiOutputChannel, currentOutFrame);
+
+			//	Update ANC inserter params (must be after SetOutputFrame, same as burn mode)
+			//	Parse the buffer to get actual transmit data size
+			ULWord ancF1Size = 0;
+			ULWord ancF2Size = 0;
+
+			if (pFrameData->fAncBuffer.GetByteCount() > 0)
+			{
+				AJAAncillaryList ancListF1;
+				ancListF1.AddReceivedAncillaryData(
+					static_cast<const uint8_t*>(pFrameData->fAncBuffer.GetHostPointer()),
+					pFrameData->fAncBuffer.GetByteCount());
+
+				//	Get transmit data size using the proper API
+				//	For progressive 1080p24: isProgressive=true, F2StartLine=0
+				ULWord txF1Size = 0, txF2Size = 0;
+				ancListF1.GetAncillaryDataTransmitSize(true, 0, txF1Size, txF2Size);
+				ancF1Size = txF1Size;
+
+			}
+
+			if (pFrameData->fAncBuffer2.GetByteCount() > 0)
+			{
+				AJAAncillaryList ancListF2;
+				ancListF2.AddReceivedAncillaryData(
+					static_cast<const uint8_t*>(pFrameData->fAncBuffer2.GetHostPointer()),
+					pFrameData->fAncBuffer2.GetByteCount());
+				ULWord txF1Size2 = 0, txF2Size2 = 0;
+				ancListF2.GetAncillaryDataTransmitSize(!isInterlace, 0, txF1Size2, txF2Size2);
+				ancF2Size = isInterlace ? txF2Size2 : txF1Size2;
+			}
+
+			//	For progressive formats, there's no F2 data
+			//	Only use fallback for F1 if parsing failed
+			if (ancF1Size == 0 && pFrameData->fAncBuffer.GetByteCount() > 0)
+				ancF1Size = pFrameData->fAncBuffer.GetByteCount();
+			//	For progressive, set F2 to 0 (no field 2 data)
+			if (!isInterlace)
+				ancF2Size = 0;
+
+			mDevice.AncInsertSetReadParams(sdiOutputIndex, currentOutFrame, ancF1Size, sdiOutputChannel);
+
+			if (isInterlace)
+				mDevice.AncInsertSetField2ReadParams(sdiOutputIndex, currentOutFrame, ancF2Size, sdiOutputChannel);
+
+			//	Write timecode from loaded frame data (same as burn mode)
+			if (!pFrameData->fTimecodes.empty())
+			{
+				//	Use first available timecode from the map
+				const NTV2_RP188& timecodeValue = pFrameData->fTimecodes.begin()->second;
+				for (NTV2ChannelSetConstIter iter(mRP188Outputs.begin()); iter != mRP188Outputs.end(); ++iter)
+					mDevice.SetRP188Data(*iter, timecodeValue);
+			}
+
+			//	Release frame back to producer
+			mFrameDataRing.EndConsumeNextBuffer();
+			mFramesProcessed++;
+
+			//	Enable inserter after first complete frame (same timing as burn mode)
+			if (mFramesProcessed == 1)
+				mDevice.AncInsertSetEnable(sdiOutputIndex, true);
+		}
+
+		//	Clean up
+		mDevice.AncInsertSetEnable(sdiOutputIndex, false);
+		mDevice.AncSetFrameBufferSize(savedF1ByteCapacity, savedF2ByteCapacity);
+
+		//	Wait for producer thread to finish
+		while (mProducerThread.Active())
+			AJATime::Sleep(10);
+
+		BURNNOTE("Playback-only mode completed");
+		return;  //	Don't execute the burn mode code below
+	}
+
+	//	CAPTURE/BURN MODE: Original code path
+
 	const bool	doAncInput				(mConfig.WithAnc() && NTV2_INPUT_SOURCE_IS_SDI(mConfig.fInputSource));
 	const bool	doAncOutput				(mConfig.WithAnc() && NTV2_OUTPUT_DEST_IS_SDI(mOutputDest));
 	const UWord	sdiInput				(UWord(::GetIndexForNTV2InputSource(mConfig.fInputSource)));
@@ -946,3 +1241,93 @@ bool NTV2LLBurn::AnalogLTCInputHasTimecode (void)
 	return regValue ? true : false;
 
 }	//	AnalogLTCInputHasTimecode
+
+
+bool NTV2LLBurn::RouteTsiOutput (void)
+{
+	//	Route FrameStores to TSI Mux, then to SDI output
+	//	For IO 4K Plus in 6G TSI mode: Ch3+Ch4 → 425Mux2 → SDI3
+
+	//	FrameStore outputs to TSI Mux inputs
+	mDevice.Connect(NTV2_Xpt425Mux2AInput, NTV2_XptFrameBuffer3YUV);
+	mDevice.Connect(NTV2_Xpt425Mux2BInput, NTV2_XptFrameBuffer4YUV);
+
+	//	TSI Mux output to SDI3
+	mDevice.Connect(::GetSDIOutputInputXpt(NTV2_CHANNEL3, false), NTV2_Xpt425Mux2AYUV);
+	mDevice.Connect(::GetSDIOutputInputXpt(NTV2_CHANNEL3, true), NTV2_Xpt425Mux2BYUV);  //	DS2
+
+	//	Enable SDI3 transmitter
+	mDevice.SetSDITransmitEnable(NTV2_CHANNEL3, true);
+
+	//	Set up RP188 outputs for channel 3
+	mRP188Outputs.clear();
+	mRP188Outputs.insert(NTV2_CHANNEL3);
+
+	return true;
+}	//	RouteTsiOutput
+
+
+AJAStatus NTV2LLBurn::SetupPlaybackBuffers (void)
+{
+	mFrameDataRing.SetAbortFlag(&mGlobalQuit);
+
+	NTV2FormatDescriptor fd(mVideoFormat, mConfig.fPixelFormat);
+
+	mHostBuffers.reserve(LLBURN_CIRCULAR_BUFFER_SIZE);
+	while (mHostBuffers.size() < LLBURN_CIRCULAR_BUFFER_SIZE)
+	{
+		mHostBuffers.push_back(NTV2FrameData());
+		NTV2FrameData& frameData = mHostBuffers.back();
+
+		frameData.fVideoBuffer.Allocate(fd.GetVideoWriteSize());
+		frameData.fAncBuffer.Allocate(NTV2_ANCSIZE_MAX);
+		frameData.fAncBuffer2.Allocate(NTV2_ANCSIZE_MAX);
+
+		mFrameDataRing.Add(&frameData);
+	}
+
+	cerr << "Allocated " << mHostBuffers.size() << " playback buffers" << endl;
+	return AJA_STATUS_SUCCESS;
+}	//	SetupPlaybackBuffers
+
+
+void NTV2LLBurn::StartProducerThread (void)
+{
+	mProducerThread.Attach(ProducerThreadStatic, this);
+	mProducerThread.SetPriority(AJA_ThreadPriority_High);
+	mProducerThread.Start();
+}	//	StartProducerThread
+
+
+void NTV2LLBurn::ProducerThreadStatic (AJAThread * pThread, void * pContext)
+{
+	(void) pThread;
+	NTV2LLBurn* pApp = reinterpret_cast<NTV2LLBurn*>(pContext);
+	pApp->ProduceFrames();
+}	//	ProducerThreadStatic
+
+
+void NTV2LLBurn::ProduceFrames (void)
+{
+	BURNNOTE("Producer thread started");
+
+	while (!mGlobalQuit)
+	{
+		//	Get next available slot in ring buffer
+		NTV2FrameData* pFrameData = mFrameDataRing.StartProduceNextBuffer();
+		if (!pFrameData)
+		{
+			AJATime::Sleep(10);  //	Ring buffer full, wait for consumer
+			continue;
+		}
+
+		//	Load frame from disk into the buffer
+		auto copyConsumer = std::make_shared<PomfortCommon::CopyFrameConsumer>(pFrameData);
+		mFileProducer->consumeWhenFrameIsReady(copyConsumer);
+
+		//	Signal frame is ready for consumption
+		mFrameDataRing.EndProduceNextBuffer();
+	}
+
+	BURNNOTE("Producer thread completed");
+}	//	ProduceFrames

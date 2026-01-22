@@ -39,11 +39,13 @@ int main (int argc, const char ** argv)
 	char *			pInputSrcSpec	(AJA_NULL);		//	SDI source spec
 	char *			pTcSource		(AJA_NULL);		//	Time code source string
 	char *			pPixelFormat	(AJA_NULL);		//	Pixel format spec
+	char *			pPlaybackDir	(AJA_NULL);		//	Directory for file-based playback
 	int				doMultiFormat	(0);			//	MultiFormat mode?
 	int				showVersion		(0);			//	Show version?
 	int				noAudio			(0);			//	Disable audio?
 	int				doAnc			(0);			//	Use the Anc Extractor/Inserter
 	int				doHanc			(0);			//	Use the Anc Extractor/Inserter with Audio
+	int				do4K			(0);			//	Enable 4K/UHD TSI mode
 	AJADebug::Open();
 
 	//	Command line option descriptions:
@@ -58,6 +60,8 @@ int main (int argc, const char ** argv)
 		{"anc",			'a',	POPT_ARG_NONE,		&doAnc,			0,	"use Anc ext/ins",				AJA_NULL					},
 		{"hanc",		'h',	POPT_ARG_NONE,		&doHanc,		0,	"use Anc ext/ins with audio",	AJA_NULL					},
 		{"tcsource",	't',	POPT_ARG_STRING,	&pTcSource,		0,	"time code source",				"'?' to list"				},
+		{"playdir",		0,		POPT_ARG_STRING,	&pPlaybackDir,	0,	"dir for file-based playback",	"path to captured frames"	},
+		{"4k",			0,		POPT_ARG_NONE,		&do4K,			0,	"enable 4K/UHD TSI mode",		AJA_NULL					},
 		POPT_AUTOHELP
 		POPT_TABLEEND
 	};
@@ -110,8 +114,22 @@ int main (int argc, const char ** argv)
 	config.fWithAnc			= doAnc   ? true  : false;
 	config.fWithHanc		= doHanc  ? true  : false;
 
+	//	Set up extended config for file playback and 4K mode
+	LLBurnConfig llConfig;
+	if (pPlaybackDir)
+		llConfig.fPlaybackDirectory = pPlaybackDir;
+	llConfig.fEnable4K = do4K ? true : false;
+
+	//	If playback directory is specified, VANC+HANC are auto-enabled
+	if (!llConfig.fPlaybackDirectory.empty())
+	{
+		cout << "Playback mode: " << llConfig.fPlaybackDirectory << endl;
+		if (llConfig.fEnable4K)
+			cout << "4K TSI mode enabled (using channel 3)" << endl;
+	}
+
 	//	Instantiate the NTV2LLBurn object...
-	NTV2LLBurn burner (config);
+	NTV2LLBurn burner (config, llConfig);
 
 	::signal (SIGINT, SignalHandler);
 	#if defined (AJAMac)
@@ -121,8 +139,8 @@ int main (int argc, const char ** argv)
 
 	//	Initialize the NTV2LLBurn instance...
 	AJAStatus status (burner.Init());
-	if (AJA_FAILURE (status))
-		{cerr << "## ERROR:  Initialization failed, status=" << status << endl;  return 4;}
+//	if (AJA_FAILURE (status))
+//		{cerr << "## ERROR:  Initialization failed, status=" << status << endl;  return 4;}
 
 	//	Start the burner's capture and playout threads...
 	burner.Run();

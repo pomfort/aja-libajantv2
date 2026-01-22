@@ -70,6 +70,7 @@ let project = Project(
                 "demos/ntv2llburn/main.cpp",
                 "demos/ntv2llburn/ntv2llburn.cpp",
                 "demos/ntv2democommon.cpp",
+                "../pomfort_common.cpp",
             ],
             dependencies: [
                 .target(name:"libajantv2"),
