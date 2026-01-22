@@ -153,6 +153,10 @@ AJAStatus NTV2LLBurn::Init (void)
 			mVideoFormat = capturedFormat;
 			cerr << "Using captured video format: " << ::NTV2VideoFormatToString(mVideoFormat) << endl;
 		}
+		else
+		{
+			cerr << "## WARNING: Could not detect video format from recording, using default" << endl;
+		}
 
 		//	In playback mode, always enable VANC+HANC
 		mConfig.fWithAnc = true;
@@ -173,16 +177,19 @@ AJAStatus NTV2LLBurn::Init (void)
 	if (AJA_FAILURE (status))
 		return status;
 
-	//	Set up the circular buffers...
-	status = SetupHostBuffers();
-	if (AJA_FAILURE (status))
-		return status;
-
-	//	Set up playback buffers for file-based playback
+	//	Set up buffers based on mode
 	if (!mLLConfig.fPlaybackDirectory.empty())
 	{
+		//	Playback mode: only need circular buffer for file playback
 		status = SetupPlaybackBuffers();
 		if (AJA_FAILURE(status))
+			return status;
+	}
+	else
+	{
+		//	Burn mode: need host buffers for capture/playout
+		status = SetupHostBuffers();
+		if (AJA_FAILURE (status))
 			return status;
 	}
 
@@ -215,12 +222,17 @@ AJAStatus NTV2LLBurn::SetupVideo (void)
 
 		if (mLLConfig.fEnable4K)
 		{
+			cerr << "4K TSI mode enabled (using channel 3)" << endl;
+
 			//	TSI mode: Enable 2 frame stores (Ch3+Ch4)
 			NTV2ChannelSet frameStores;
 			frameStores.insert(NTV2_CHANNEL3);
 			frameStores.insert(NTV2_CHANNEL4);
 			mDevice.EnableChannels(frameStores, !mConfig.fDoMultiFormat);
 			mDevice.SetTsiFrameEnable(true, NTV2_CHANNEL3);
+
+			//	Enable 6G output on SDI 3 (IO 4K Plus requirement)
+			mDevice.SetSDIOut6GEnable(NTV2_CHANNEL3, true);
 		}
 		else
 		{
@@ -291,9 +303,21 @@ AJAStatus NTV2LLBurn::SetupVideo (void)
 		}
 
 		//	Set output frame buffer indices (for ping-pong)
-		mOutputStartFrame = 0;
-		mOutputEndFrame = 1;
-		mDevice.SetOutputFrame(mConfig.fOutputChannel, mOutputStartFrame);
+		if (mLLConfig.fEnable4K)
+		{
+			//	4K mode: Use frames 6-7 for channel 3 (matching livegrade: 2 * port 3 = 6)
+			mOutputStartFrame = 6;
+			mOutputEndFrame = 7;
+			mDevice.SetOutputFrame(mConfig.fOutputChannel, mOutputStartFrame);
+			mDevice.SetOutputFrame(NTV2_CHANNEL4, mOutputStartFrame + 2);  //	Channel 4 uses frames 8-9
+		}
+		else
+		{
+			//	HD mode: Use frames 0-1
+			mOutputStartFrame = 0;
+			mOutputEndFrame = 1;
+			mDevice.SetOutputFrame(mConfig.fOutputChannel, mOutputStartFrame);
+		}
 
 		//	Get frame geometry info
 		mFormatDesc = NTV2FormatDescriptor(mVideoFormat, mConfig.fPixelFormat);
@@ -1246,15 +1270,22 @@ bool NTV2LLBurn::AnalogLTCInputHasTimecode (void)
 bool NTV2LLBurn::RouteTsiOutput (void)
 {
 	//	Route FrameStores to TSI Mux, then to SDI output
-	//	For IO 4K Plus in 6G TSI mode: Ch3+Ch4 → 425Mux2 → SDI3
+	//	For IO 4K Plus in 6G TSI mode (matching livegrade routing)
+	//	FrameBuffer3 + FrameBuffer3_DS2 → 425Mux3 → SDI1/SDI2
+	//	FrameBuffer4 + FrameBuffer4_DS2 → 425Mux4 → SDI3/SDI4
+	//	SDI3 is the single 6G wire output
 
-	//	FrameStore outputs to TSI Mux inputs
-	mDevice.Connect(NTV2_Xpt425Mux2AInput, NTV2_XptFrameBuffer3YUV);
-	mDevice.Connect(NTV2_Xpt425Mux2BInput, NTV2_XptFrameBuffer4YUV);
+	//	FrameStore outputs to TSI Mux inputs (with dual-stream DS2)
+	mDevice.Connect(NTV2_Xpt425Mux3AInput, NTV2_XptFrameBuffer3YUV);
+	mDevice.Connect(NTV2_Xpt425Mux3BInput, NTV2_XptFrameBuffer3_DS2YUV);
+	mDevice.Connect(NTV2_Xpt425Mux4AInput, NTV2_XptFrameBuffer4YUV);
+	mDevice.Connect(NTV2_Xpt425Mux4BInput, NTV2_XptFrameBuffer4_DS2YUV);
 
-	//	TSI Mux output to SDI3
-	mDevice.Connect(::GetSDIOutputInputXpt(NTV2_CHANNEL3, false), NTV2_Xpt425Mux2AYUV);
-	mDevice.Connect(::GetSDIOutputInputXpt(NTV2_CHANNEL3, true), NTV2_Xpt425Mux2BYUV);  //	DS2
+	//	TSI Mux outputs to SDI outputs
+	mDevice.Connect(NTV2_XptSDIOut1Input, NTV2_Xpt425Mux3AYUV);
+	mDevice.Connect(NTV2_XptSDIOut2Input, NTV2_Xpt425Mux3BYUV);
+	mDevice.Connect(NTV2_XptSDIOut3Input, NTV2_Xpt425Mux4AYUV);
+	mDevice.Connect(NTV2_XptSDIOut4Input, NTV2_Xpt425Mux4BYUV);
 
 	//	Enable SDI3 transmitter
 	mDevice.SetSDITransmitEnable(NTV2_CHANNEL3, true);
