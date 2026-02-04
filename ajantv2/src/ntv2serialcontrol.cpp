@@ -8,7 +8,7 @@
 #include "ntv2serialcontrol.h"
 #include "ntv2devicescanner.h"
 #include "ntv2devicefeatures.h"
-#include <ajabase/system/systemtime.h>
+#include "ajabase/system/systemtime.h"
 #include <assert.h>
 
 

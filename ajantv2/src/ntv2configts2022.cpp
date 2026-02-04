@@ -11,7 +11,7 @@
 #include "ntv2utils.h"
 #include "ntv2formatdescriptor.h"
 
-#include <ajabase/system/systemtime.h>
+#include "ajabase/system/systemtime.h"
 #include <sstream>
 
 #if defined (AJALinux) || defined (AJAMac)
