@@ -43,6 +43,7 @@ NTV2LLBurn::NTV2LLBurn (const BurnConfig & inConfig, const LLBurnConfig & inLLCo
 		mAudioOutLastAddress	(0),
 		mFramesProcessed		(0),
 		mFramesDropped			(0),
+		mVancMode				(NTV2_VANCMODE_OFF),
 		mProducerThread			(AJAThread())
 {
 }	//	constructor
@@ -158,6 +159,9 @@ AJAStatus NTV2LLBurn::Init (void)
 			cerr << "## WARNING: Could not detect video format from recording, using default" << endl;
 		}
 
+		//	Detect VANC mode from recording (taller frames)
+		mVancMode = PomfortCommon::restoreVANCMode(mLLConfig.fPlaybackDirectory);
+
 		//	In playback mode, always enable VANC+HANC
 		mConfig.fWithAnc = true;
 		mConfig.fWithHanc = true;
@@ -249,8 +253,12 @@ AJAStatus NTV2LLBurn::SetupVideo (void)
 		if (mDevice.features().HasBiDirectionalSDI() && NTV2_OUTPUT_DEST_IS_SDI(mOutputDest))
 			mDevice.SetSDITransmitEnable(mConfig.fOutputChannel, true);
 
-		//	Set multi-format mode
-		if (mDevice.features().CanDoMultiFormat() && mConfig.fDoMultiFormat)
+		//	Set multi-format mode.
+		//	Force multi-format when using TALLER VANC so the tall geometry stays scoped to
+		//	this channel (fix carried over from another project where a uniform frame
+		//	geometry on the device clobbered the tall output).
+		const bool forceMultiFormat = (mVancMode != NTV2_VANCMODE_OFF);
+		if (mDevice.features().CanDoMultiFormat() && (mConfig.fDoMultiFormat || forceMultiFormat))
 			mDevice.SetMultiFormatMode(true);
 		else if (mDevice.features().CanDoMultiFormat())
 			mDevice.SetMultiFormatMode(false);
@@ -282,16 +290,18 @@ AJAStatus NTV2LLBurn::SetupVideo (void)
 		else
 			RouteOutputSignal();
 
-		//	Disable VANC
-		mDevice.SetVANCMode(NTV2_VANCMODE_OFF, mConfig.fOutputChannel);
+		//	Set VANC mode: use taller geometry if recording has VANC data, otherwise off
+		mDevice.SetVANCMode(mVancMode, mConfig.fOutputChannel);
 		if (mLLConfig.fEnable4K)
-			mDevice.SetVANCMode(NTV2_VANCMODE_OFF, NTV2_CHANNEL4);
+			mDevice.SetVANCMode(NTV2_VANCMODE_OFF, NTV2_CHANNEL4);	//	4K doesn't support VANC geometry
 		if (::Is8BitFrameBufferFormat(mConfig.fPixelFormat))
 		{
 			mDevice.SetVANCShiftMode(mConfig.fOutputChannel, NTV2_VANCDATA_NORMAL);
 			if (mLLConfig.fEnable4K)
 				mDevice.SetVANCShiftMode(NTV2_CHANNEL4, NTV2_VANCDATA_NORMAL);
 		}
+		if (mVancMode != NTV2_VANCMODE_OFF)
+			cerr << "Playback VANC mode: " << (mVancMode == NTV2_VANCMODE_TALLER ? "TALLER" : "TALL") << endl;
 
 		//	Set up RP188 for output
 		mRP188Outputs.clear();
@@ -319,8 +329,8 @@ AJAStatus NTV2LLBurn::SetupVideo (void)
 			mDevice.SetOutputFrame(mConfig.fOutputChannel, mOutputStartFrame);
 		}
 
-		//	Get frame geometry info
-		mFormatDesc = NTV2FormatDescriptor(mVideoFormat, mConfig.fPixelFormat);
+		//	Get frame geometry info (include VANC mode for taller frames)
+		mFormatDesc = NTV2FormatDescriptor(mVideoFormat, mConfig.fPixelFormat, mVancMode);
 		return AJA_STATUS_SUCCESS;
 	}
 
@@ -1302,7 +1312,7 @@ AJAStatus NTV2LLBurn::SetupPlaybackBuffers (void)
 {
 	mFrameDataRing.SetAbortFlag(&mGlobalQuit);
 
-	NTV2FormatDescriptor fd(mVideoFormat, mConfig.fPixelFormat);
+	NTV2FormatDescriptor fd(mVideoFormat, mConfig.fPixelFormat, mVancMode);
 
 	mHostBuffers.reserve(LLBURN_CIRCULAR_BUFFER_SIZE);
 	while (mHostBuffers.size() < LLBURN_CIRCULAR_BUFFER_SIZE)

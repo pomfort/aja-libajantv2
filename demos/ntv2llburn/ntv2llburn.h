@@ -198,6 +198,7 @@ class NTV2LLBurn
 		NTV2Buffer			mpHostAudioBuffer;		///< @brief My host audio buffer for the samples matching the video buffer
 		NTV2Buffer			mpHostF1AncBuffer;		///< @brief My host Anc buffer (F1)
 		NTV2Buffer			mpHostF2AncBuffer;		///< @brief My host Anc buffer (F2)
+		NTV2VANCMode		mVancMode;				///< @brief VANC mode detected from recording (playback) or OFF (burn)
 
 		uint32_t			mAudioInLastAddress;	///< @brief My record of the location of the last audio sample captured
 		uint32_t			mAudioOutLastAddress;	///< @brief My record of the location of the last audio sample played

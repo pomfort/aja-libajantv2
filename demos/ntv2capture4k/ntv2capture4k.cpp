@@ -121,8 +121,11 @@ AJAStatus NTV2Capture4K::Init (void)
 	}
 	mDevice.SetTaskMode(NTV2_OEM_TASKS);		//	Prevent interference from AJA retail services
 
+	//	Force multi-format mode for non-4K captures so the TALLER VANC geometry
+	//	stays scoped to this channel (uniform geometry caused breakage elsewhere).
+	const bool forceMultiFormat = !mConfig.fEnable4K;
 	if (mDevice.features().CanDoMultiFormat())
-		mDevice.SetMultiFormatMode(mConfig.fDoMultiFormat);
+		mDevice.SetMultiFormatMode(mConfig.fDoMultiFormat || forceMultiFormat);
 
 	//	This demo permits only the input channel/frameStore to be specified.  Set the input source here...
 	//	4K/UHD-specific channel validation and correction (only when 4K mode is enabled)
@@ -233,15 +236,27 @@ AJAStatus NTV2Capture4K::SetupVideo (void)
 	if (mConfig.fEnable4K)
 		CNTV2DemoCommon::Get4KInputFormat(mVideoFormat);
 
-	mFormatDesc = NTV2FormatDescriptor(mVideoFormat, mConfig.fPixelFormat);
-
 	//	Setting SDI output clock timing/reference is unimportant for capture-only apps...
 	if (!mConfig.fDoMultiFormat)						//	...if not sharing the device...
 		mDevice.SetReference(NTV2_REFERENCE_FREERUN);	//	...let it free-run
 
 	//	Set the device video format to whatever was detected at the input(s)...
 	mDevice.SetVideoFormat (mVideoFormat, false, false, mConfig.fInputChannel);
-	mDevice.SetVANCMode (mActiveFrameStores, NTV2_VANCMODE_OFF);	//	Disable VANC
+
+	//	Enable VANC TALLER mode to capture full VANC lines in the video frame buffer.
+	//	4K formats don't have VANC geometries in the SDK, so only enable for HD/2K.
+	const NTV2VANCMode vancMode = mConfig.fEnable4K ? NTV2_VANCMODE_OFF : NTV2_VANCMODE_TALLER;
+	mDevice.SetVANCMode (mActiveFrameStores, vancMode);
+
+	//	Build format descriptor after VANC mode is set so it reflects the taller geometry
+	mFormatDesc = NTV2FormatDescriptor(mVideoFormat, mConfig.fPixelFormat, vancMode);
+
+	if (vancMode != NTV2_VANCMODE_OFF)
+		cerr	<< "## NOTE:  VANC " << (vancMode == NTV2_VANCMODE_TALLER ? "TALLER" : "TALL")
+				<< " mode enabled: " << mFormatDesc.GetFullRasterHeight() << " lines total, "
+				<< mFormatDesc.GetFirstActiveLine() << " VANC lines, "
+				<< mFormatDesc.GetBytesPerRow() << " bytes/row" << endl;
+
     mDevice.AncSetFrameBufferSize (NTV2_ANCSIZE_MAX, NTV2_ANCSIZE_MAX);
 
 	//	Enable TSI/4K-specific frame modes when 4K mode is enabled
