@@ -232,6 +232,10 @@ AJAStatus NTV2Capture4K::SetupVideo (void)
 	if (mVideoFormat == NTV2_FORMAT_UNKNOWN)
 		{cerr << "## ERROR:  No input signal or unknown format" << endl;  return AJA_STATUS_NOINPUT;}
 
+	cerr << "## NOTE:  Detected input format '" << ::NTV2VideoFormatToString(mVideoFormat)
+		 << "' on " << ::NTV2InputSourceToString(mConfig.fInputSource, true)
+		 << (mConfig.fEnable4K ? " (4K mode)" : " (HD mode)") << endl;
+
 	//	Convert to 4K format if 4K mode is enabled
 	if (mConfig.fEnable4K)
 		CNTV2DemoCommon::Get4KInputFormat(mVideoFormat);
@@ -474,9 +478,17 @@ void NTV2Capture4K::CaptureFrames (void)
 	//	Initialize and start capture AutoCirculate...
 	mDevice.AutoCirculateStop(mActiveFrameStores);	//	Just in case
 	if (!mDevice.AutoCirculateInitForInput (mConfig.fInputChannel, mConfig.fFrames, mAudioSystem, mACOptions))
+	{
+		cerr << "## ERROR:  AutoCirculateInitForInput failed on Ch" << DEC(mConfig.fInputChannel+1)
+			 << " (frames " << mConfig.fFrames.firstFrame() << ".." << mConfig.fFrames.lastFrame()
+			 << ", videoWriteSize " << mFormatDesc.GetVideoWriteSize() << " bytes) -- aborting capture" << endl;
 		mGlobalQuit = true;
+	}
 	if (!mGlobalQuit  &&  !mDevice.AutoCirculateStart(mConfig.fInputChannel))
+	{
+		cerr << "## ERROR:  AutoCirculateStart failed on Ch" << DEC(mConfig.fInputChannel+1) << " -- aborting capture" << endl;
 		mGlobalQuit = true;
+	}
 
 	//	Ingest frames til Quit signaled...
 	while (!mGlobalQuit)
