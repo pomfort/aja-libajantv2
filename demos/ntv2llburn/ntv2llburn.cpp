@@ -159,8 +159,10 @@ AJAStatus NTV2LLBurn::Init (void)
 			cerr << "## WARNING: Could not detect video format from recording, using default" << endl;
 		}
 
-		//	Detect VANC mode from recording (taller frames)
-		mVancMode = PomfortCommon::restoreVANCMode(mLLConfig.fPlaybackDirectory);
+		//	Detect VANC mode from recording (taller frames). Pass the detected format
+		//	so we can fall back to inferring the mode from per-frame vanc_data.dat
+		//	sizes when the recording was made by the in-app recorder (no vanc_info.dat).
+		mVancMode = PomfortCommon::restoreVANCMode(mLLConfig.fPlaybackDirectory, mVideoFormat);
 
 		//	In playback mode, always enable VANC+HANC
 		mConfig.fWithAnc = true;
@@ -264,9 +266,28 @@ AJAStatus NTV2LLBurn::SetupVideo (void)
 			mDevice.SetMultiFormatMode(false);
 
 		//	Set video format for output channel(s)
-		mDevice.SetVideoFormat(mVideoFormat, false, false, mConfig.fOutputChannel);
+		const bool setFmtOk = mDevice.SetVideoFormat(mVideoFormat, false, false, mConfig.fOutputChannel);
+		cerr << "SetVideoFormat(" << ::NTV2VideoFormatToString(mVideoFormat)
+			 << ", ch=" << (mConfig.fOutputChannel + 1) << ") -> "
+			 << (setFmtOk ? "OK" : "FAIL") << endl;
 		if (mLLConfig.fEnable4K)
 			mDevice.SetVideoFormat(mVideoFormat, false, false, NTV2_CHANNEL4);
+
+		//	Read back what the device thinks we set
+		{
+			NTV2VideoFormat actualFmt = NTV2_FORMAT_UNKNOWN;
+			mDevice.GetVideoFormat(actualFmt, mConfig.fOutputChannel);
+			NTV2Standard std = NTV2_STANDARD_INVALID;
+			mDevice.GetStandard(std, mConfig.fOutputChannel);
+			NTV2FrameGeometry fg = NTV2_FG_INVALID;
+			mDevice.GetFrameGeometry(fg, mConfig.fOutputChannel);
+			NTV2FrameRate fr = NTV2_FRAMERATE_UNKNOWN;
+			mDevice.GetFrameRate(fr, mConfig.fOutputChannel);
+			cerr << "  device sees: format=" << ::NTV2VideoFormatToString(actualFmt)
+				 << " standard=" << ::NTV2StandardToString(std)
+				 << " geometry=" << ::NTV2FrameGeometryToString(fg)
+				 << " rate=" << ::NTV2FrameRateToString(fr) << endl;
+		}
 
 		//	Set pixel format
 		if (!mDevice.features().CanDoFrameBufferFormat(mConfig.fPixelFormat))
@@ -291,7 +312,7 @@ AJAStatus NTV2LLBurn::SetupVideo (void)
 			RouteOutputSignal();
 
 		//	Set VANC mode: use taller geometry if recording has VANC data, otherwise off
-		mDevice.SetVANCMode(mVancMode, mConfig.fOutputChannel);
+		const bool setVancOk = mDevice.SetVANCMode(mVancMode, mConfig.fOutputChannel);
 		if (mLLConfig.fEnable4K)
 			mDevice.SetVANCMode(NTV2_VANCMODE_OFF, NTV2_CHANNEL4);	//	4K doesn't support VANC geometry
 		if (::Is8BitFrameBufferFormat(mConfig.fPixelFormat))
@@ -300,8 +321,15 @@ AJAStatus NTV2LLBurn::SetupVideo (void)
 			if (mLLConfig.fEnable4K)
 				mDevice.SetVANCShiftMode(NTV2_CHANNEL4, NTV2_VANCDATA_NORMAL);
 		}
-		if (mVancMode != NTV2_VANCMODE_OFF)
-			cerr << "Playback VANC mode: " << (mVancMode == NTV2_VANCMODE_TALLER ? "TALLER" : "TALL") << endl;
+		cerr << "SetVANCMode("
+			 << (mVancMode == NTV2_VANCMODE_TALLER ? "TALLER"
+				: mVancMode == NTV2_VANCMODE_TALL ? "TALL" : "OFF")
+			 << ") -> " << (setVancOk ? "OK" : "FAIL") << endl;
+		{
+			NTV2FrameGeometry fg = NTV2_FG_INVALID;
+			mDevice.GetFrameGeometry(fg, mConfig.fOutputChannel);
+			cerr << "  geometry after VANC: " << ::NTV2FrameGeometryToString(fg) << endl;
+		}
 
 		//	Set up RP188 for output
 		mRP188Outputs.clear();
@@ -782,6 +810,12 @@ void NTV2LLBurn::ProcessFrames (void)
 			}
 
 			//	DMA video to output frame buffer
+			if (mFramesProcessed == 0)
+				cerr << "First frame DMA: video=" << pFrameData->fVideoBuffer.GetByteCount()
+					 << " anc=" << pFrameData->fAncBuffer.GetByteCount()
+					 << " anc2=" << pFrameData->fAncBuffer2.GetByteCount()
+					 << " fNumAnc=" << pFrameData->fNumAncBytes
+					 << " fNumAnc2=" << pFrameData->fNumAnc2Bytes << endl;
 			mDevice.DMAWriteFrame(currentOutFrame,
 				reinterpret_cast<ULWord*>(pFrameData->fVideoBuffer.GetHostPointer()),
 				pFrameData->fVideoBuffer.GetByteCount());
@@ -1313,6 +1347,11 @@ AJAStatus NTV2LLBurn::SetupPlaybackBuffers (void)
 	mFrameDataRing.SetAbortFlag(&mGlobalQuit);
 
 	NTV2FormatDescriptor fd(mVideoFormat, mConfig.fPixelFormat, mVancMode);
+	cerr << "Playback buffer geometry: " << fd.GetRasterWidth() << "x" << fd.GetFullRasterHeight()
+		 << " firstActive=" << fd.GetFirstActiveLine()
+		 << " rowBytes=" << fd.GetBytesPerRow()
+		 << " totalBytes=" << fd.GetTotalBytes()
+		 << " writeSize=" << fd.GetVideoWriteSize() << endl;
 
 	mHostBuffers.reserve(LLBURN_CIRCULAR_BUFFER_SIZE);
 	while (mHostBuffers.size() < LLBURN_CIRCULAR_BUFFER_SIZE)
