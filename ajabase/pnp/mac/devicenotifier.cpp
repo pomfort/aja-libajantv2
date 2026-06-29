@@ -222,7 +222,7 @@ void DeviceNotifier::DeviceAdded (io_iterator_t iterator)
 {
 	io_object_t service;
 	bool deviceFound = false;
-	
+
 	//	This iteration is essential to keep this callback working...
 	IOIteratorReset(iterator);
 	for ( ;(service = IOIteratorNext(iterator)); IOObjectRelease(service))
@@ -230,7 +230,7 @@ void DeviceNotifier::DeviceAdded (io_iterator_t iterator)
 		AddGeneralInterest(service);		// optional
 		deviceFound = true;
 	}
-	
+
 	// now notify our callback
 	DNINFO("Device added, calling DeviceClientCallback " << INST(m_clientCallback));
 	if (deviceFound && m_clientCallback)
@@ -383,44 +383,75 @@ bool KonaNotifier::Install (CFMutableDictionaryRef matchingDictionary)
 	
 
 	// walk through each of our devices
-	static const std::string driverName ("com_aja_iokit_ntv2");
-	io_iterator_t notifyIterator_matched, notifyIterator_terminated;
-		
-	// Device Added
-	ioReturn = ::IOServiceAddMatchingNotification ( m_notificationPort,
-													kIOMatchedNotification,
-													IOServiceMatching(driverName.c_str ()),
-													reinterpret_cast<IOServiceMatchingCallback>(DeviceAddedCallback), 
-													this, 
-													&notifyIterator_matched);
+    // Must match the IOService class/name the driver interface actually opens
+    // (ntv2macdriverinterface.cpp: sNTV2PCIKEXTClassName / sNTV2PCIDEXTName). The kext class is
+    // "com_aja_iokit_ntv2" - the previous "com_aja_kext_ntv2" matched nothing, so PnP never fired.
+    static const std::string kextName ("com_aja_iokit_ntv2");
+    static const std::string dextName ("AJANTV2");
 
+	// Watch BOTH the kext IOService class (class match) and the dext IOService name (name match),
+	// each for matched (added) and terminated (removed). Each notification's iterator MUST be drained
+	// below to (a) enumerate already-present devices and (b) ARM the notification for future events,
+	// so each needs its own variable. The DEXT-detection change (commit 507b0878) reused one variable
+	// for kext+dext, leaving the kext iterator undrained/unarmed - so kext devices never notified.
+	io_iterator_t kextMatched = IO_OBJECT_NULL, dextMatched = IO_OBJECT_NULL;
+	io_iterator_t kextTerminated = IO_OBJECT_NULL, dextTerminated = IO_OBJECT_NULL;
+
+	// Device Added (kext class match)
+	ioReturn = ::IOServiceAddMatchingNotification ( m_notificationPort, kIOMatchedNotification,
+													IOServiceMatching(kextName.c_str ()),
+													reinterpret_cast<IOServiceMatchingCallback>(DeviceAddedCallback),
+													this, &kextMatched);
 	if (ioReturn != kIOReturnSuccess)
 	{
-		DNFAIL(KR(ioReturn) << " -- IOServiceAddMatchingNotification for 'kIOMatchedNotification' failed");
+		DNFAIL(KR(ioReturn) << " -- IOServiceAddMatchingNotification (kext added) failed");
 		return false;
 	}
 
-	// Device Terminated
-	ioReturn = ::IOServiceAddMatchingNotification ( m_notificationPort,
-													kIOTerminatedNotification,
-													IOServiceMatching(driverName.c_str ()),
-													reinterpret_cast<IOServiceMatchingCallback>(DeviceRemovedCallback), 
-													this, 
-													&notifyIterator_terminated);
+	// Device Added (dext name match)
+	ioReturn = ::IOServiceAddMatchingNotification ( m_notificationPort, kIOMatchedNotification,
+													IOServiceNameMatching(dextName.c_str ()),
+													reinterpret_cast<IOServiceMatchingCallback>(DeviceAddedCallback),
+													this, &dextMatched);
 	if (ioReturn != kIOReturnSuccess)
 	{
-		DNFAIL(KR(ioReturn) << " -- IOServiceAddMatchingNotification for 'kIOTerminatedNotification' failed");
+		DNFAIL(KR(ioReturn) << " -- IOServiceAddMatchingNotification (dext added) failed");
 		return false;
 	}
 
-	DeviceAddedCallback (this, notifyIterator_matched);
-	m_deviceMatchList.push_back (notifyIterator_matched);
+	// Device Terminated (kext class match)
+	ioReturn = ::IOServiceAddMatchingNotification ( m_notificationPort, kIOTerminatedNotification,
+													IOServiceMatching(kextName.c_str ()),
+													reinterpret_cast<IOServiceMatchingCallback>(DeviceRemovedCallback),
+													this, &kextTerminated);
+	if (ioReturn != kIOReturnSuccess)
+	{
+		DNFAIL(KR(ioReturn) << " -- IOServiceAddMatchingNotification (kext terminated) failed");
+		return false;
+	}
 
-	DeviceRemovedCallback (this, notifyIterator_terminated);
-	m_deviceMatchList.push_back (notifyIterator_terminated);
+	// Device Terminated (dext name match)
+	ioReturn = ::IOServiceAddMatchingNotification ( m_notificationPort, kIOTerminatedNotification,
+													IOServiceNameMatching(dextName.c_str ()),
+													reinterpret_cast<IOServiceMatchingCallback>(DeviceRemovedCallback),
+													this, &dextTerminated);
+	if (ioReturn != kIOReturnSuccess)
+	{
+		DNFAIL(KR(ioReturn) << " -- IOServiceAddMatchingNotification (dext terminated) failed");
+		return false;
+	}
+
+	// Drain (and thereby arm) every iterator; this also enumerates any already-connected devices.
+	DeviceAddedCallback (this, kextMatched);		m_deviceMatchList.push_back (kextMatched);
+	DeviceAddedCallback (this, dextMatched);		m_deviceMatchList.push_back (dextMatched);
+	DeviceRemovedCallback (this, kextTerminated);	m_deviceMatchList.push_back (kextTerminated);
+	DeviceRemovedCallback (this, dextTerminated);	m_deviceMatchList.push_back (dextTerminated);
 
 	DNINFO("On exit: callback installed, deviceInterestList.size=" << m_deviceInterestList.size() << ", deviceMatchList.size=" << m_deviceMatchList.size());
-	return m_deviceInterestList.size() > 0; //	**MrBill**	SHOULDN'T THIS RETURN m_deviceMatchList.size() > 0	????
+	// Success = the notifications are armed, NOT "a device is present right now". The original
+	// `m_deviceInterestList.size() > 0` made first-plug-in undetectable and forced an immediate
+	// Uninstall() when launching with no AJA device connected.
+	return m_deviceMatchList.size() > 0;
 
 }	//	KonaNotifier::Install
 

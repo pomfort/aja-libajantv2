@@ -75,7 +75,7 @@ let project = Project(
             dependencies: [
                 .target(name:"libajantv2"),
                 .sdk(name:"Foundation", type: .framework),
-                .sdk(name:"IoKit", type: .framework)
+                .sdk(name:"IOKit", type: .framework)
             ],
             settings: .settings(base: [
                 "HEADER_SEARCH_PATHS": "demos"

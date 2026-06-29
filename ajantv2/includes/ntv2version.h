@@ -15,7 +15,7 @@
 // version number mamually
 
 #define AJA_NTV2_SDK_VERSION_MAJOR        17            ///< @brief The SDK major version number, an unsigned decimal integer.
-#define AJA_NTV2_SDK_VERSION_MINOR        0            ///< @brief The SDK minor version number, an unsigned decimal integer.
+#define AJA_NTV2_SDK_VERSION_MINOR        6           ///< @brief The SDK minor version number, an unsigned decimal integer.
 #define AJA_NTV2_SDK_VERSION_POINT        0            ///< @brief The SDK "point" release version, an unsigned decimal integer.
 #define AJA_NTV2_SDK_BUILD_NUMBER        0            ///< @brief The SDK build number, an unsigned decimal integer.
 #define AJA_NTV2_SDK_BUILD_DATETIME        "Wed Feb 28 05:40:23 UTC 2024"        ///< @brief The date and time the SDK was built, in this format: "MM/DD/YYYY +8:hh:mm:ss"
