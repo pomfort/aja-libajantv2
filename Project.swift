@@ -72,9 +72,9 @@ let project = Project(
                 "demos/ntv2democommon.cpp",
             ],
             dependencies: [
-                .target(name:"libajantv2"),
-                .sdk(name:"Foundation", type: .framework),
-                .sdk(name:"IoKit", type: .framework)
+                .target(name: "libajantv2"),
+                .sdk(name: "Foundation", type: .framework),
+                .sdk(name: "IOKit", type: .framework)
             ],
             settings: .settings(base: [
                 "HEADER_SEARCH_PATHS": "demos"
